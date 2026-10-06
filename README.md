@@ -31,6 +31,13 @@
   <a href="https://github.com/BlueHeisenberg/SCSKiller/issues/new?template=game-request.yml">Request a game</a>
 </p>
 
+> [!IMPORTANT]
+> **This is SCSKiller-Arc, an unofficial fork of [SCSKiller](https://github.com/BlueHeisenberg/SCSKiller)** that adds
+> experimental Intel Arc support ([below](#intel-arc-this-fork)). It isn't made or endorsed by the SCSKiller authors, and
+> its builds don't come from the official Releases. Its bugs are this fork's own: please report them here, not upstream.
+> The rest of this README is SCSKiller's, including its measurements and screenshots, which were taken with SCSKiller
+> on NVIDIA and AMD, not with this fork.
+
 > [!WARNING]
 > The only official downloads are this repository's [Releases](https://github.com/BlueHeisenberg/SCSKiller/releases).
 > See [official links](#official-links) for the accounts and sites that belong to SCSKiller.
@@ -103,6 +110,15 @@ Measured with SCSKiller's pipeline recorder. Your numbers will vary by game, GPU
 
 Intel GPUs aren't supported yet: I don't have one to test on. If you'd like to sponsor an Intel Arc GPU, get in touch at
 [contact@scskiller.com](mailto:contact@scskiller.com).
+
+### Intel Arc (this fork)
+
+SCSKiller-Arc adds experimental Intel support, off unless the environment variable `SCSKILLER_EXPERIMENTAL_INTEL` is `1`.
+Its settings come from measurements on an Arc B580 (driver 32.0.101.9034) with `tools/intel-arc/measure.ps1`: Intel's
+D3D12 cache is keyed on the exe file name and doesn't depend on the folder, so the compile can reach it; pixel shaders
+are compiled for each exact render-target format and blend state; DirectX 11 games are compiled too. Details are in
+[ARCHITECTURE.md](ARCHITECTURE.md#intel). It hasn't been checked on many games yet, so expect rough edges. Builds come
+from this fork's GitHub Actions (`build` workflow, `SCSKiller-unsigned` artifact) and are unsigned.
 
 Download `SCSKiller-Setup.exe` from [Releases](https://github.com/BlueHeisenberg/SCSKiller/releases/latest)
 and run it. It installs for your user only, needs no admin rights, and keeps itself up to date.
