@@ -4,10 +4,13 @@
 # throwaway exe's pipelines, and checks:
 #   1. harvest: does the driver write a file to the target directory (and what is it)?
 #   2. load: with OfflineShaderCacheFile pointing at it and the exe's LocalLow cache file gone, is the baseline create a hit?
-#   3. prebuilt: is a harvested file loaded from PrebuiltShaderBinaries\<every family>\ under its own name?
+#   3. prebuilt: is a harvested file loaded from PrebuiltShaderBinaries\<every family>\ under its own and the exe's name?
+#   4. redirect: with harvest mode on and the LocalLow cache empty, is the harvested file used as the cache?
+#   -Fill: then fill under harvest mode (selftest dxcfill batches) to see whether the harvested file stops at 512 MB like
+#   the LocalLow one (~2 minutes per 30 MB batch; stops at -MaxGB or when the file stops growing).
 # Needs an administrator PowerShell. Every registry value it sets is removed (or put back) at the end, and every file it
 # placed outside its results folder deleted. Run: powershell -ExecutionPolicy Bypass -File harvest-test.ps1
-param([int]$Runs = 3)
+param([int]$Runs = 3, [switch]$Fill, [double]$MaxGB = 0.75)
 
 $ErrorActionPreference = 'Continue'
 $kit = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -65,9 +68,11 @@ function Baseline([string]$file) {
     if ($row) { [double]::Parse(($row -split "`t")[1], [Globalization.CultureInfo]::InvariantCulture) } else { -1 }
 }
 # Median baseline create of $Runs probe processes; the exe's LocalLow cache file is deleted before each unless -Keep.
+# Clean: every LocalLow cache file that wasn't there when the test started (the throwaway exe's) is deleted.
+function CleanCache { Get-ChildItem $cache -File -ErrorAction SilentlyContinue | Where-Object { -not $script:start.ContainsKey($_.Name) } | Remove-Item -ErrorAction SilentlyContinue }
 function Probe([string]$what, [switch]$Keep) {
     $ms = foreach ($i in 1..$Runs) {
-        if (-not $Keep -and $script:mine) { Remove-Item (Join-Path $cache $script:mine) -ErrorAction SilentlyContinue }
+        if (-not $Keep) { CleanCache }
         & $exe fields2 $seed (Join-Path $out 'probe.txt') | Out-Null
         Baseline (Join-Path $out 'probe.txt')
     }
@@ -83,16 +88,34 @@ try {
     New-Item -ItemType Directory -Force $harvest | Out-Null
     SetValue 'OfflineShaderCacheHarvestModeEnabled' 1 'DWord'
     SetValue 'OfflineShaderCacheHarvestTargetDirectory' $harvest 'String'
-    $before = @{}; Get-ChildItem $cache -File -ErrorAction SilentlyContinue | ForEach-Object { $before[$_.Name] = 1 }
+    $script:start = @{}; Get-ChildItem $cache -File -ErrorAction SilentlyContinue | ForEach-Object { $script:start[$_.Name] = 1 }
     & $exe fields1 $seed (Join-Path $out 'setup.txt') | Out-Null
-    $script:mine = (Get-ChildItem $cache -File | Where-Object { -not $before.ContainsKey($_.Name) } | Sort-Object Length -Descending | Select-Object -First 1).Name
+    $script:mine = (Get-ChildItem $cache -File | Where-Object { -not $script:start.ContainsKey($_.Name) } | Sort-Object Length -Descending | Select-Object -First 1).Name
     Log ("LocalLow cache file under harvest mode: {0}" -f $(if ($mine) { $mine } else { 'none (harvest mode may replace the normal cache)' }))
     $harvested = @(Get-ChildItem $harvest -Recurse -File -ErrorAction SilentlyContinue)
     Log ("1. harvest: {0} file(s) in {1}" -f $harvested.Count, $harvest)
-    foreach ($f in $harvested) { Log ("   {0} ({1:N0} bytes): {2}" -f $f.FullName, $f.Length, (Hex $f.FullName)); Copy-Item $f.FullName $out }
-    $hit = Probe 'hit (harvest mode on, LocalLow file kept)' -Keep
+    foreach ($f in $harvested) { Log ("   {0} ({1:N0} bytes): {2}" -f $f.FullName, $f.Length, (Hex $f.FullName)); Copy-Item -LiteralPath $f.FullName $out }
+    $harvested = @($harvested | ForEach-Object { Get-Item -LiteralPath (Join-Path $out $_.Name) })   # tests 2 and 3 use these copies
+    $hit = Probe 'hit (harvest mode on, nothing deleted)' -Keep
+    $redirect = Probe '4. harvest mode on, LocalLow cache cleaned before each run'
+    $hfile = @(Get-ChildItem $harvest -Recurse -File | Sort-Object Length -Descending)[0]
+    if ($Fill -and $hfile) {
+        Log ("fill under harvest mode: {0}" -f $hfile.Name)
+        $last = -1; $flat = 0
+        for ($b = 1; $b -le 200; $b++) {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            & $exe dxcfill 2000 250 $b 0 | Out-Null
+            $size = (Get-Item -LiteralPath $hfile.FullName -ErrorAction SilentlyContinue).Length
+            $ll = (Get-ChildItem $cache -File | Where-Object { -not $script:start.ContainsKey($_.Name) } | Measure-Object Length -Sum).Sum
+            Log ("  batch {0}: harvested file {1:N1} MB, new LocalLow files {2:N1} MB, {3:N0} s" -f $b, ($size / 1MB), ($ll / 1MB), $sw.Elapsed.TotalSeconds)
+            if ($size -le $last + 1MB) { $flat++ } else { $flat = 0 }
+            if ($flat -ge 2) { Log ("  the harvested file stopped growing at {0:N1} MB" -f ($size / 1MB)); break }
+            if ($size -ge $MaxGB * 1GB) { Log ("  past {0} GB: the harvested file isn't capped at 512 MB" -f $MaxGB); break }
+            $last = $size
+        }
+    }
     ClearValue 'OfflineShaderCacheHarvestModeEnabled'; ClearValue 'OfflineShaderCacheHarvestTargetDirectory'
-    $cold = Probe 'cold (LocalLow file deleted before each run)'
+    $cold = Probe 'cold (harvest mode off, LocalLow cache cleaned)'
 
     if ($harvested) {
         # --- 2. load through OfflineShaderCacheFile ---
@@ -104,15 +127,16 @@ try {
         $placed = @()
         foreach ($fam in Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | ForEach-Object { Get-ChildItem $_.FullName -Directory }) {
             foreach ($f in $harvested) {
-                $n = if ($f.Name -like '*.pso.bin') { $f.Name } else { "$($f.Name).pso.bin" }
-                $p = Join-Path $fam.FullName $n
-                if (-not (Test-Path $p)) { Copy-Item $f.FullName $p -ErrorAction SilentlyContinue; if (Test-Path $p) { $placed += $p } }
+                foreach ($n in @("$($f.Name).pso.bin", "$name.pso.bin", "$name.exe.pso.bin")) {
+                    $p = Join-Path $fam.FullName $n
+                    if (-not (Test-Path -LiteralPath $p)) { Copy-Item -LiteralPath $f.FullName $p -ErrorAction SilentlyContinue; if (Test-Path -LiteralPath $p) { $placed += $p } }
+                }
             }
         }
         $pre = Probe ("3. harvested file(s) placed as prebuilts ({0} copies)" -f $placed.Count)
-        foreach ($p in $placed) { Remove-Item $p -ErrorAction SilentlyContinue }
+        foreach ($p in $placed) { Remove-Item -LiteralPath $p -ErrorAction SilentlyContinue }
         Log ''
-        foreach ($t in @(@('2. OfflineShaderCacheFile', $load), @('3. prebuilt folder', $pre))) {
+        foreach ($t in @(@('4. harvest folder as the cache', $redirect), @('2. OfflineShaderCacheFile', $load), @('3. prebuilt folder', $pre))) {
             $v = if ($t[1] -ge 0 -and $t[1] -lt $hit + ($cold - $hit) / 3) { 'LOADED (as fast as the hit)' } else { 'not loaded (as slow as cold)' }
             Log ("result: {0}: {1} (hit {2:N2} ms, cold {3:N2} ms)" -f $t[0], $v, $hit, $cold)
         }
@@ -124,7 +148,7 @@ try {
 finally {
     Restore
     Log 'registry: every value this test set is removed (or put back)'
-    if ($script:mine) { Remove-Item (Join-Path $cache $script:mine) -ErrorAction SilentlyContinue }
+    if ($script:start) { CleanCache }
     Remove-Item $exe -ErrorAction SilentlyContinue
     Remove-Item $harvest -Recurse -Force -ErrorAction SilentlyContinue   # copies are in the results
 }
