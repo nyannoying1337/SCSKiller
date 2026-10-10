@@ -380,7 +380,7 @@ public class DiscoveryAndVendorTests(ITestOutputHelper output)
         if (games.Count == 0) return;   // this machine's Xbox app has no games (or C:/D:\XboxGames don't exist)
 
         // Atomfall's config declares Launcher/Atomfall.exe as Id="Game", an API-picking launcher stub (the "launch" helper
-        // hint rejects it); the real D3D12 exe is Atomfall_dx12.exe (docs/engine-survey.md). Each title is checked only
+        // hint rejects it); the real D3D12 exe is Atomfall_dx12.exe. Each title is checked only
         // where it is installed.
         if (games.SingleOrDefault(g => g.Name == "Atomfall") is { } atomfall)
         {
@@ -518,6 +518,39 @@ public class DiscoveryAndVendorTests(ITestOutputHelper output)
             Assert.Equal(Path.Combine(root, "game.exe"), GameFiles.FindExe(root));
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    /// <summary>A Ubisoft+ build beside the game's exe (Valhalla's, at their real sizes): the plain exe, though smaller.</summary>
+    [Fact]
+    public void Exe_discovery_takes_the_exe_beside_a_ubisoft_plus_build_whatever_the_sizes()
+    {
+        var root = Directory.CreateTempSubdirectory("scskiller-plus-test-").FullName;
+        try
+        {
+            void Put(string name, long size)
+            {
+                using var f = File.Create(Path.Combine(root, name));
+                f.SetLength(size);
+            }
+            Put("ACValhalla.exe", 544_294_936);
+            Put("ACValhalla_Plus.exe", 601_040_408);
+            Assert.Equal(Path.Combine(root, "ACValhalla.exe"), GameFiles.FindExe(root));
+            File.Delete(Path.Combine(root, "ACValhalla.exe"));
+            Assert.Equal(Path.Combine(root, "ACValhalla_Plus.exe"), GameFiles.FindExe(root));   // no plain build beside it
+            File.Delete(Path.Combine(root, "ACValhalla_Plus.exe"));
+            Put("game.exe", 100);
+            Put("GAME_PLUS.EXE", 200);
+            Assert.Equal(Path.Combine(root, "game.exe"), GameFiles.FindExe(root));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void A_folder_name_comes_from_a_path_ending_in_either_separator()
+    {
+        Assert.Equal("Assassin's Creed Valhalla", GameFiles.FolderName("C:/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/games/Assassin's Creed Valhalla/"));
+        Assert.Equal("Valhalla", GameFiles.FolderName(@"D:\Games\Valhalla\"));
+        Assert.Equal("Valhalla", GameFiles.FolderName(@"D:\Games\Valhalla"));
     }
 
     [Fact]
@@ -696,6 +729,20 @@ public class DiscoveryAndVendorTests(ITestOutputHelper output)
             Assert.Equal(stub, xbox.ExePath);   // what the config names
             Assert.Equal(gdk, GameFiles.GameExe(xbox.InstallDir, xbox.ExePath));
             Assert.Equal(gdk, GameFiles.FindExe(content));   // the manual add and the stores without a configured exe
+
+            // a Shipping build the config marks dev-only or for another device family is never the game; others are
+            var dev = Unreal(@"Excluded\Content");
+            var devStub = Put(@"Excluded\Content", "Game.exe", 100);
+            Put(@"Excluded\Content\Game\Binaries\WinGDK", "Game-WinGDK-Shipping.exe", 4096);
+            Put(@"Excluded\Content\Console\Binaries\WinGDK", "Console-WinGDK-Shipping.exe", 4096);
+            File.WriteAllText(Path.Combine(dev, "MicrosoftGame.config"), """<Game><Identity Name="Pub.Excluded" Version="1.0.0.0"/><ExecutableList><Executable Name="Game.exe" TargetDeviceFamily="PC"/>"""
+                + """<Executable Name="Game\Binaries\WinGDK\Game-WinGDK-Shipping.exe" IsDevOnly="true"/>"""
+                + """<Executable Name="Console\Binaries\WinGDK\Console-WinGDK-Shipping.exe" TargetDeviceFamily="Scarlett"/></ExecutableList></Game>""");
+            Assert.Equal(devStub, GameFiles.GameExe(dev, devStub));
+            Assert.Equal(devStub, GameFiles.FindExe(dev, devStub));   // nor in the scan after the Shipping lookup
+            Assert.Equal(devStub, GameFiles.FindExe(dev));
+            var pc = Put(@"Excluded\Content\Pc\Binaries\WinGDK", "Game-WinGDK-Shipping.exe", 4096);   // not in the config: the game's
+            Assert.Equal(pc, GameFiles.GameExe(dev, devStub));
 
             // Steam's Win64 layout, with a launcher a launch option names, Engine's helpers, a 32-bit build and a patcher's copy
             var steam = Unreal(@"steamapps\common\Game");
@@ -880,8 +927,33 @@ public class DiscoveryAndVendorTests(ITestOutputHelper output)
             Assert.Equal(AntiCheat.None, GameFiles.DetectAntiCheat(Install("clean", @"Game\Plugins\NCGuardSDKTools\readme.txt", "notes.xem.txt")));
             Assert.Equal(AntiCheat.BattlEye, GameFiles.DetectAntiCheat(Install("beclient", @"Game\Binaries\Win64\BEClient_x64.dll")));
             Assert.Equal(AntiCheat.Other, GameFiles.DetectAntiCheat(Install("warframe", "Warframe.x64.exe")));
+            Assert.Equal(AntiCheat.Other, GameFiles.DetectAntiCheat(Install("aniimo", @"Game\Binaries\Win64\NEP2.dll")));
+            Assert.Equal(AntiCheat.Other, GameFiles.DetectAntiCheat(Install("aniimo-cleaner", "NEPCleaner.exe")));
+            Assert.Equal(AntiCheat.Other, GameFiles.DetectAntiCheat(Install("halo", "arbiter.dll")));
+            Assert.Equal(AntiCheat.None, GameFiles.DetectAntiCheat(Install("not-arbiter", "arbiter.dll.bak", @"Game\myarbiter.dll", "nep2.txt")));
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    /// <summary>A Blizzard game installed by Battle.net but listed by another store, or added by hand, has no battlenet: id:
+    /// Battle.net's own files in its folder mark it.</summary>
+    [Theory]
+    [InlineData(".build.info")]
+    [InlineData(".product.db")]
+    public void BattleNet_install_files_mark_a_game_listed_elsewhere(string marker)
+    {
+        var dir = Directory.CreateTempSubdirectory("scskiller-anticheat-test-").FullName;
+        try
+        {
+            var exe = Path.Combine(dir, "_retail_", "Game.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(exe)!);
+            File.WriteAllBytes(exe, [0]);
+            var game = new Game("steam:1", "Blizzard game", Store.Steam, dir, exe);
+            Assert.Equal(AntiCheat.None, GameFiles.DetectAntiCheat(game));
+            File.WriteAllText(Path.Combine(dir, marker), "");
+            Assert.Equal(AntiCheat.Other, GameFiles.DetectAntiCheat(game));
+        }
+        finally { Directory.Delete(dir, true); }
     }
 
     /// <summary>War Thunder's standalone layout: BattlEye sits in the root, the exe in win64, which is the folder suggested.</summary>
