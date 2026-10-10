@@ -1,12 +1,12 @@
 namespace SCSKiller.Core.Vendors;
 
-/// <summary>NVIDIA's DXCache is split per application (measured on 610.88, see ARCHITECTURE.md): files are named
-/// <c>TTTTa91dKKKKKKKK.nvph</c>, where KKKKKKKK is the application key, a 32-bit hash of the exe file name (case-insensitive,
-/// path-independent; not a plain CRC/FNV/murmur/xxHash of it). D3D12 and D3D11 share it: fc52 = shader cache (a pure D3D11
-/// app writes only this one), 0002 = the D3D12 pipeline cache, c54e = ray tracing state objects (created by the first one;
-/// handled by key like the others). A second process of the same name running at the same time
-/// gets key + 1. The driver keeps the files open while the device lives, which is how a key is attributed to a game: a
-/// process named like the game (its staged warm copy, or the game itself) has them open.</summary>
+/// <summary>NVIDIA's DXCache is split per application: files are named <c>TTTTa91dKKKKKKKK.nvph</c>, where KKKKKKKK is the
+/// application key, a 32-bit hash of the exe file name (case-insensitive, path-independent; not a plain
+/// CRC/FNV/murmur/xxHash of it). TTTT is the file's type, and the types change with the driver (610.88: fc52 shader cache,
+/// 0002 D3D12 pipelines, c54e ray tracing state objects; 617.14: 32e6, 0002, bc2f), so files match by key alone, whatever
+/// their type. D3D12 and D3D11 share the key. A second process of the same name running at the same time gets key + 1. The
+/// driver keeps the files open while the device lives, which is how a key is attributed to a game: a process named like
+/// the game (its staged warm copy, or the game itself) has them open.</summary>
 public sealed class NvidiaAppCache(string dir) : IAppCache
 {
     public string Dir { get; } = dir;
