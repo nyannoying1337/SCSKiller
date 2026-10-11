@@ -37,6 +37,12 @@ public sealed class IntelBackend(GpuInfo dxgi) : IGpuVendorBackend, IRefreshable
 
     public CacheUsage GetCacheUsage() => new(CacheDir, AmdBackend.Bytes(CacheDir), UpperBound: false);
 
+    /// <summary>The driver caps each game's cache file at 512 MiB (measured on an Arc B580, driver 32.0.101.9034:
+    /// tools/intel-arc/cache-limit.ps1; ARCHITECTURE.md): past it the driver evicts that game's own entries, so a larger
+    /// game keeps only part of its compile. Not configurable (every workaround tested in ARCHITECTURE.md failed).</summary>
+    public const long PerGameCap = 512L << 20;
+    public long? PerGameCacheCap => PerGameCap;
+
     public CacheLimit? GetCacheLimit() => null;
 
     public void SetCacheLimit(CacheLimit limit) =>

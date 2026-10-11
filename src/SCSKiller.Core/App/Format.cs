@@ -48,13 +48,13 @@ public static class Format
     /// <summary>A Library row's note: a few words for the status's reason (the whole one is in the row's tooltip and on the
     /// game's page); null when the status title says it. Read from the core's reasons (ScsKiller.Evaluate, Planner.Check,
     /// the engine readers); an unknown one shows its first clause.</summary>
-    public static string? ShortNote(GameState s)
+    public static string? ShortNote(GameState s, long? perGameCap = null)
     {
         var r = s.StatusReason;
         bool Has(string part) => r.Contains(part, StringComparison.Ordinal);
         bool Starts(string part) => r.StartsWith(part, StringComparison.Ordinal);
         var partly = ScsKiller.IsPartlyWarmed(s);
-        return s.Status switch
+        var note = s.Status switch
         {
             _ when s.CompileUnreached => "This game needs a custom loader",
             GameStatus.Warmed when ScsKiller.IsPartlyCompiled(s) => Sentence(ScsKiller.PartlyCompiledNote(s)),
@@ -94,6 +94,10 @@ public static class Format
             _ when Starts("not supported on this GPU") => "Not supported on this GPU yet",
             _ => Sentence(FirstClause(r)),
         };
+        // Intel caps each game's cache (IntelBackend.PerGameCap): a warmed game over it keeps only part, so say so on the row.
+        if (perGameCap is { } cap && s.Status == GameStatus.Warmed && ScsKiller.OverPerGameCap(s, cap))
+            note = (note is null ? "" : note + " · ") + $"over the {Bytes(cap)} limit";
+        return note;
     }
 
     /// <summary>A shader mod that doesn't block the game, after its reason: "; RenoDX changes this game's pipelines: ...".

@@ -296,7 +296,7 @@ public sealed class GameRow(GameState s, bool queued = false, bool compiling = f
         _ => s.StatusReason,
     } + Format.ModNote(s);
     /// <summary>The row's note under the status: a few words (<see cref="Format.ShortNote"/>); null when the status says it all.</summary>
-    public string? Note => Format.ShortNote(s);
+    public string? Note => Format.ShortNote(s, App.Core.Vendor.PerGameCacheCap);
     public string RowNote => Playing ? "Playing now" + (Note is { } n ? " · " + n : "") : Note ?? "";
     public bool HasRowNote => RowNote.Length > 0;
     public string RowTip => (Playing ? "Playing now · " : "") + FullNote;
@@ -855,7 +855,9 @@ public sealed class DetailVm(string id) : Bindable
     long Failed => s.LastWarmFailed ?? 0;
     long Skipped => s.LastWarmSkipped ?? 0;
     long Crashed => s.LastWarmCrashed ?? 0;
-    public string CompileText => s.WarmedAt is { } at
+    public string CompileText => CompileTextBase
+        + (ScsKiller.PerGameCapNote(s, App.Core.Vendor.PerGameCacheCap) is { } n ? " " + n : "");
+    string CompileTextBase => s.WarmedAt is { } at
         ? $"Compiled {Fmt.When(at)}" + (s.LastWarmTime is { } t ? $" in {Format.Duration(t)}" : "") + $", for driver {s.WarmedDriverVersion}."
           + (s.LastWarmFailed != null && Failed == 0 && Skipped == 0 && Crashed == 0 ? " Nothing failed." : "")   // null = not known (a warm from before these were kept): no claim
           + (Failed > 0 ? $" The driver skipped {Failed:N0} combination{(Failed == 1 ? "" : "s")}." : "")
@@ -863,6 +865,7 @@ public sealed class DetailVm(string id) : Bindable
         : s.LastWarmTime is { } last ? $"Its shader cache was cleared. The last compile took {Format.Duration(last)}."
         : (s.EstimatedWarmTime is { } est ? $"It takes about {Format.Duration(est)} and runs in the background, so you can keep using the PC." : "It runs in the background, so you can keep using the PC.")
           + (s.EstimatedCacheBytes is { } b ? $" It adds about {Format.Bytes(b)} to the driver's shader cache." : "");
+
     public string SkippedTitle => $"{Skipped + Crashed:N0} skipped";
     long NeedsRecording => Math.Min(Skipped, s.LastWarmNeedsRecording ?? 0);   // of Skipped: flagged by the community recording
     long NotInGame => Skipped - NeedsRecording;
