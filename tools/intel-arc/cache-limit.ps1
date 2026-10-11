@@ -2,6 +2,7 @@
 #   powershell -ExecutionPolicy Bypass -File cache-limit.ps1                  measure the limit
 #   powershell -ExecutionPolicy Bypass -File cache-limit.ps1 -ScanDriver      also list cache-related strings in the driver
 #   ... -MaxGB 4                                                               stop after this much growth (default 3)
+# cache-check.cmd runs it with -MaxGB 1: past the 512 MB cap, then whether the oldest PSOs still come from the cache.
 # The fill runs `selftest dxcfill` under a throwaway exe name in batches of distinct compute PSOs and records, after each
 # batch, that name's cache file and the whole folder. A per-file cap shows as the file stopping growing (or shrinking:
 # entries evicted); a folder-wide cap as other files being deleted. Other games' cache files may then be evicted: they
@@ -34,6 +35,11 @@ foreach ($k in 'HKLM:\SOFTWARE\Intel', 'HKCU:\SOFTWARE\Intel', 'HKLM:\SOFTWARE\W
 # --- Fill ----------------------------------------------------------------------------------------------------------------
 $exe = Join-Path $kit "scskfill$((Get-Random -Maximum 999999)).exe"
 Copy-Item (Join-Path $kit 'selftest.exe') $exe
+# dxcfill's creates timed alone (no D3DCompile): the median, and the % under 1 ms (from the driver cache; a compile takes ms)
+function Creates($lines) {
+    foreach ($l in @($lines)) { if ("$l" -match 'create median ([\d.]+) ms, under 1 ms ([\d.]+)%') { return [pscustomobject]@{ Ms = [double]$Matches[1]; Hit = [double]$Matches[2] } } }
+    [pscustomobject]@{ Ms = $null; Hit = $null }
+}
 function Folder { Get-ChildItem $cache -File -ErrorAction SilentlyContinue | Select-Object Name, Length, LastWriteTimeUtc }
 $start = @(Folder)
 $startNames = @{}; foreach ($f in $start) { $startNames[$f.Name] = $f.Length }
@@ -43,7 +49,7 @@ $rows = @()
 Log ("filling in batches of {0:N0} compute PSOs (a line per batch; up to {1} GB of growth)..." -f $Batch, $MaxGB)
 for ($b = 1; $b -le 10000; $b++) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    & $exe dxcfill $Batch $Unroll $b 0 | Out-Null
+    $cr = Creates (& $exe dxcfill $Batch $Unroll $b 0)
     $now = @(Folder)
     if (-not $mine) {   # this name's file: the one that's new since the start
         $mine = ($now | Where-Object { -not $startNames.ContainsKey($_.Name) } | Sort-Object Length -Descending | Select-Object -First 1).Name
@@ -54,8 +60,8 @@ for ($b = 1; $b -le 10000; $b++) {
     $gone = @($start | Where-Object { $n = $_.Name; -not ($now | Where-Object Name -eq $n) }).Count
     $total = ($now | Measure-Object Length -Sum).Sum
     $rows += [pscustomobject]@{ Batch = $b; PSOs = $b * $Batch; FileMB = [math]::Round($size / 1MB, 1); FolderMB = [math]::Round($total / 1MB, 1)
-        OtherFilesGone = $gone; Seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1) }
-    Log ("batch {0}: {1:N0} PSOs, file {2:N1} MB, folder {3:N1} MB, other files gone {4}, {5:N0} s" -f $b, ($b * $Batch), ($size / 1MB), ($total / 1MB), $gone, $sw.Elapsed.TotalSeconds)
+        OtherFilesGone = $gone; Seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1); CreateMs = $cr.Ms; HitPct = $cr.Hit }
+    Log ("batch {0}: {1:N0} PSOs, file {2:N1} MB, folder {3:N1} MB, other files gone {4}, {5:N0} s, create median {6:N2} ms" -f $b, ($b * $Batch), ($size / 1MB), ($total / 1MB), $gone, $sw.Elapsed.TotalSeconds, $cr.Ms)
     if ($null -eq $size) { Log 'this exe''s cache file was deleted: a folder-wide eviction took it'; break }
     if ($size -le $last + 1MB) { $flat++ } else { $flat = 0 }   # at the cap the file still changes by a few bytes (B580: 512.0 MB)
     if ($flat -ge 3) { Log ("the file stopped growing at {0:N1} MB: a per-file cap" -f ($size / 1MB)); break }
@@ -64,11 +70,21 @@ for ($b = 1; $b -le 10000; $b++) {
 }
 $rows | Export-Csv (Join-Path $out 'fill.csv') -NoTypeInformation
 
-# Are the first batch's PSOs still cached, or were they evicted? Batch 1 again: cached creates take well under 1 ms each.
-$sw = [Diagnostics.Stopwatch]::StartNew()
-& $exe dxcfill $Batch $Unroll 1 0 | Out-Null
-$again = $sw.Elapsed.TotalSeconds
-Log ("batch 1 again: {0:N1} s (its first run: {1} s; much faster = still cached, about the same = evicted)" -f $again, $rows[0].Seconds)
+# Are the first batch's PSOs still cached, or were they evicted? Their creates again, beside the newest batch's again (surely
+# cached) and their own first run (compiled): the share of creates under 1 ms, i.e. served from the driver cache.
+if ($rows.Count -ge 2) {
+    $newest = $rows[-1].Batch
+    $hit = Creates (& $exe dxcfill $Batch $Unroll $newest 0)
+    $old = Creates (& $exe dxcfill $Batch $Unroll 1 0)
+    Log ("from the cache (creates under 1 ms): batch 1 first run {0:N0}%, batch {1} again {2:N0}%, batch 1 again {3:N0}%" -f $rows[0].HitPct, $newest, $hit.Hit, $old.Hit)
+    Log ("create median: batch 1 first run {0:N2} ms, batch {1} again {2:N2} ms, batch 1 again {3:N2} ms" -f $rows[0].CreateMs, $newest, $hit.Ms, $old.Ms)
+    if ($null -ne $old.Hit -and $hit.Hit -ge 50) {
+        $kept = [math]::Min(100, 100 * $old.Hit / $hit.Hit)
+        $verdict = if ($kept -ge 90) { 'KEPT: the oldest PSOs still come from the cache' } elseif ($kept -le 10) { 'EVICTED: the oldest PSOs compile again' }
+                   else { 'PARTLY: some of the oldest PSOs were evicted' }
+        Log ("result after {0:N1} MB: {1} (about {2:N0}% of batch 1 kept)" -f $rows[-1].FileMB, $verdict, $kept)
+    } else { Log 'no result: the newest batch did not come from the cache either, so the timing cannot tell' }
+}
 
 Remove-Item $exe -ErrorAction SilentlyContinue
 if ($mine) { Remove-Item (Join-Path $cache $mine) -ErrorAction SilentlyContinue; Log "deleted the throwaway cache file $mine" }

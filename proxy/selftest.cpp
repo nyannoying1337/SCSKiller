@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <deque>
 #include <filesystem>
@@ -3025,7 +3026,8 @@ static int layerwarm_parent(const std::wstring& a, const std::wstring& dir, cons
 
 // `selftest dxcfill <count> <unroll> <seed> [hold s]`: grows the D3D12 driver cache under this exe's name (copy it to a
 // throwaway name first) with <count> distinct compute PSOs; on AMD, unroll 250 adds about 78 KB each. hold: keeps the
-// device, and so its cache files, open that long (-1: until Enter). System d3d12.dll, no proxy.
+// device, and so its cache files, open that long (-1: until Enter). Prints the creates' times alone (the driver's
+// compile or cache hit, without D3DCompile): the median and the share under 1 ms (hits). System d3d12.dll, no proxy.
 static int dxcfill(long long count, int unroll, unsigned seed, int hold) {
     HMODULE m = load_system(L"d3d12.dll");
     CHECK(m);
@@ -3039,7 +3041,10 @@ static int dxcfill(long long count, int unroll, unsigned seed, int hold) {
     ID3D12RootSignature* rs = nullptr;
     CHECK(SUCCEEDED(ser(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &rb, &err)) && SUCCEEDED(dev->CreateRootSignature(0, rb->GetBufferPointer(), rb->GetBufferSize(), IID_PPV_ARGS(&rs))));
     std::atomic<long long> next{0}, ok{0}, bad{0};
+    std::mutex mu;
+    std::vector<double> create_ms;   // each CreateComputePipelineState alone: a driver-cache hit vs a compile, no D3DCompile
     auto work = [&] {
+        std::vector<double> mine;
         for (long long i; (i = next++) < count;) {
             unsigned long long s = seed * 1000003ull + i;
             char src[640];
@@ -3054,15 +3059,24 @@ static int dxcfill(long long count, int unroll, unsigned seed, int hold) {
             D3D12_COMPUTE_PIPELINE_STATE_DESC c = {rs};
             if (cs) c.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
             ID3D12PipelineState* pso = nullptr;
-            if (cs && SUCCEEDED(dev->CreateComputePipelineState(&c, IID_PPV_ARGS(&pso)))) ++ok, pso->Release();
+            auto t0 = std::chrono::steady_clock::now();
+            HRESULT hr = cs ? dev->CreateComputePipelineState(&c, IID_PPV_ARGS(&pso)) : E_FAIL;
+            if (cs) mine.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            if (SUCCEEDED(hr)) ++ok, pso->Release();
             else ++bad;
             if (cs) cs->Release();
         }
+        std::lock_guard l(mu);
+        create_ms.insert(create_ms.end(), mine.begin(), mine.end());
     };
     std::vector<std::thread> ts;
     for (unsigned t = 0; t < std::max(1u, std::thread::hardware_concurrency()); ++t) ts.emplace_back(work);
     for (auto& t : ts) t.join();
-    printf("dxcfill: %lld created, %lld failed\n", ok.load(), bad.load());
+    std::sort(create_ms.begin(), create_ms.end());
+    double median = create_ms.empty() ? 0 : create_ms[create_ms.size() / 2];
+    size_t fast = std::lower_bound(create_ms.begin(), create_ms.end(), 1.0) - create_ms.begin();   // under 1 ms: a cache hit
+    printf("dxcfill: %lld created, %lld failed, create median %.3f ms, under 1 ms %.1f%%\n", ok.load(), bad.load(), median,
+           create_ms.empty() ? 0.0 : 100.0 * fast / create_ms.size());
     fflush(stdout);
     if (hold < 0) getchar();
     else Sleep(hold * 1000);
