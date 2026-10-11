@@ -22,6 +22,23 @@ public sealed partial class ScsKiller : IScsKiller
     /// <summary>What compiling the game adds to the driver cache: its estimate less what its keys already hold.</summary>
     public static long CacheGrowth(GameState s) => Math.Max(0, (s.EstimatedCacheBytes ?? 0) - (s.CacheOnDisk ?? 0));
 
+    /// <summary>The game's driver-cache size as the Library shows it: measured when known, else the estimate; null = neither.</summary>
+    static long? CacheBytes(GameState s) => s.CacheOnDisk ?? s.EstimatedCacheBytes;
+
+    /// <summary>The game's cache is bigger than a vendor's per-game cap (<see cref="IGpuVendorBackend.PerGameCacheCap"/>,
+    /// Intel), so the driver keeps only part of it and the rest compile in game.</summary>
+    public static bool OverPerGameCap(GameState s, long cap) => CacheBytes(s) is { } b && b > cap;
+
+    /// <summary>About what share of the game's cache fits under <paramref name="cap"/> (cap / size), 1..100.</summary>
+    public static int PerGameCapFitPercent(GameState s, long cap) =>
+        CacheBytes(s) is { } b && b > cap ? (int)Math.Round(100.0 * cap / b) : 100;
+
+    /// <summary>A sentence for a game whose cache is over the vendor's per-game cap; null when it fits or there is no cap.</summary>
+    public static string? PerGameCapNote(GameState s, long? cap) =>
+        cap is { } c && OverPerGameCap(s, c)
+            ? $"This is over the {App.Format.Bytes(c)} per-game limit of the Intel driver's shader cache, so only about {PerGameCapFitPercent(s, c)}% is kept; the rest compile in game."
+            : null;
+
     /// <summary>The pipelines a compile of the plan creates, as the Library counts them: less the ones that crash this driver.</summary>
     public static long? PlanPipelines(GameState s) => s.Plan is { } p ? Math.Max(0, p.Recorded + p.Generated + p.MiddlewareItems - (s.LastWarmCrashed ?? 0)) : null;
 

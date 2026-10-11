@@ -313,6 +313,12 @@ driver 32.0.101.9034, Windows 11. Not yet checked on games, so `IntelBackend` is
 - Files: `%USERPROFILE%\AppData\LocalLow\Intel\ShaderCache\<64 hex>`, one per exe name, growing as entries are added;
   the name is not a plain hash of the exe name. Each process also writes a `D3DSCache\<per-path folder>`, but the hit from
   another folder comes from the Intel file (only it grows there).
+- **Capped at 512 MiB per game** (`IntelBackend.PerGameCap`, measured with `tools/intel-arc/cache-limit.ps1`): the file
+  grows to exactly 512.0 MB and then the driver evicts that game's own entries to stay under it (a bucketed LRU/random
+  policy, from the driver strings), so a game whose compile is larger keeps only part of it. Not configurable, and no
+  workaround reached past it: compacting the file, Intel's `PrebuiltShaderBinaries`, `OfflineShaderCacheFile` and harvest
+  mode were all tested and either rejected or carry the same cap. The app surfaces this (`ScsKiller.PerGameCapNote`,
+  `Format.ShortNote`): a warmed game over 512 MB is shown as keeping only its measured share, not a plain "Warmed".
 - **Per stage, not state-independent** (`PerStageCache`, `UnitPolicy.Intel`). A VS and a PS compiled with other partners
   link for free. FREE: every input layout change (formats, offsets, slots, step rates, order, unread elements),
   topology, all rasterizer fields, all depth-stencil fields, DSV format, MSAA count. A PS recompile (~2 ms): any blend

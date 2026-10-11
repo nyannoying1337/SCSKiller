@@ -114,6 +114,9 @@ public interface IGpuVendorBackend
     CacheUsage GetCacheUsage();
     CacheLimit? GetCacheLimit();                 // null = not readable
     void SetCacheLimit(CacheLimit limit);        // global driver setting, needs admin: callers must have the user's explicit OK
+    /// <summary>A size the driver caps each game's own cache at, evicting that game's older entries past it (Intel: 512 MiB
+    /// per exe). null = no per-game cap; NVIDIA's limit is a global cache size and AMD's a shared folder cap, not this.</summary>
+    long? PerGameCacheCap => null;
     /// <summary>Per-application cache files (NVIDIA DXCache, AMD DxcCache/DxCache); null when the vendor's cache isn't
     /// split per application.</summary>
     IAppCache? AppCache => null;
