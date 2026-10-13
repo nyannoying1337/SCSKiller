@@ -1,6 +1,8 @@
 # Arc Cache: larger-cap experimental build
 
-Branch `intel-cache-large-experimental`. The normal `intel-cache-cap` checkout and its uncommitted changes remain separate. This branch now includes the native WinUI app and safety worker source under the adjacent `intel-cache-cap-winui` / `intel-cache-cap-gui` folders. No unrelated CLI or proxy changes were carried over.
+Branch `intel-cache-large-experimental`. The standard `intel-cache-cap` version is published separately. This branch now includes the native WinUI app and safety worker source under the adjacent `intel-cache-cap-winui` / `intel-cache-cap-gui` folders. No unrelated CLI or proxy changes were carried over.
+
+[Quick start](../intel-cache-cap-winui/docs/QUICKSTART.md) · [Private routing explained](../intel-cache-cap-winui/docs/PRIVATE-DRIVERS.md) · [Downloads](https://github.com/nyannoying1337/SCSKiller/releases)
 
 ## Build the app
 
@@ -12,7 +14,7 @@ dotnet publish tools/intel-cache-cap-winui/App/ArcCache.WinUI.csproj -c Release 
 
 The app compiles the x64 safety worker using the installed .NET Framework compiler. Windows App SDK and .NET runtime are published self-contained. The executable is `ArcCache.Experimental.exe`. No Intel or Windows driver DLL is redistributed: a matching installed package is copied locally only after explicit setup consent.
 
-## Test tomorrow
+## Try the experimental build
 
 1. Close the game and the older Arc Cache app. Open `ArcCache.Experimental.exe`.
 2. Select a game with a working private setup. Choose 8 GiB first and apply after reading the separate experimental consent. If starting fresh, prepare/test the unchanged original copy before applying a limit.

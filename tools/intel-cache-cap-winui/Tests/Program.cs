@@ -1,10 +1,22 @@
-using ArcCache.Core;
+﻿using ArcCache.Core;
 using System.Text.Json;
 
 int passed=0;
 void Check(bool yes,string message){if(!yes)throw new Exception(message);}
 void Test(string name,Action body){body();passed++;Console.WriteLine("PASS "+name);}
 void Reject(Action body){try{body();}catch(InvalidDataException){return;}throw new Exception("Expected rejection.");}
+Test("Inactive routing preserves the saved limit and gives an enable action",()=>{
+    var receipt=new ReceiptState(3,"game.exe","game.exe.local",4096,"changed-runtime-unverified",new());
+    var ui=SetupPresentation.From(new GameSetupState(true,true,true,true,receipt,null),true,false);
+    Check(ui.Installed.StartsWith("4 GiB saved")&&ui.Title=="Enable private drivers"&&ui.Next.Contains("restart Windows"),"Inactive routing lost saved cap or reported ready.");
+});
+Test("Routing statuses distinguish off, on and pending restart",()=>{
+    Check(RoutingPresentation.Status(false,false).StartsWith("Off"),"Disabled routing shown as ready.");
+    Check(RoutingPresentation.Status(true,false).StartsWith("On"),"Enabled routing shown as disabled.");
+    Check(RoutingPresentation.Status(true,true).StartsWith("Restart required"),"Pending enable shown as ready.");
+    Check(RoutingPresentation.Status(false,true).StartsWith("Restart required"),"Pending restore shown as completed.");
+});
+
 Test("Installed wide cap is distinct from unmeasured runtime behavior",()=>{
     var receipt=new ReceiptState(3,"game.exe","game.exe.local",4096,"changed-runtime-unverified",new());
     var state=new GameSetupState(true,true,true,true,receipt,null);

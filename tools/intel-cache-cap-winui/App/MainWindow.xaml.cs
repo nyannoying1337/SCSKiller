@@ -1,4 +1,4 @@
-using ArcCache.Core;
+﻿using ArcCache.Core;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -51,6 +51,7 @@ public partial class MainWindow : Window {
                 if(appId!=0){selected=games.FirstOrDefault(g=>g.AppId==appId);await Run("Showing selected game for read-only preview…",ShowGame);Filter();}
                 await Task.Delay(700);while(busy)await Task.Delay(200);Root.Background=new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(255,32,32,32));Root.UpdateLayout();
                 if(simulateDriverUpdate){ShowDriverChange(driverIdentity+"-preview-fixture");File.WriteAllText(path+".driver-checks.json",JsonSerializer.Serialize(new{ApplyEnabled=ApplyButton.IsEnabled,ApplyLabel=ApplyButton.Content?.ToString(),LaunchEnabled=LaunchButton.IsEnabled,RecoveryEnabled=RestoreButton.IsEnabled,NoticeVisible=DriverUpdateNotice.IsOpen}));}
+                if(Environment.GetCommandLineArgs().Contains("--preview-settings")){Nav.SelectedItem=Nav.FooterMenuItems.OfType<NavigationViewItem>().First(i=>Equals(i.Tag,"Settings"));Root.UpdateLayout();}
                 int runsBefore=foregroundRuns,pollsBefore=backgroundPolls;
                 if(previewWatchSeconds>0)await Task.Delay(previewWatchSeconds*1000);
                 if(previewWatchSeconds>0)File.WriteAllText(path+".checks.json",JsonSerializer.Serialize(new{ForegroundRunsBefore=runsBefore,ForegroundRunsAfter=foregroundRuns,BackgroundPolls=backgroundPolls-pollsBefore,NavigationEnabled=Nav.IsEnabled}));
@@ -94,7 +95,7 @@ public partial class MainWindow : Window {
             var details=new List<string>{"Package: "+d.GetProperty("DriverFolder").GetString()};
             foreach(var f in d.GetProperty("Files").EnumerateArray())details.Add($"{f.GetProperty("Name").GetString()} · {f.GetProperty("State").GetString()}\nSHA-256: {f.GetProperty("Hash").GetString()}\nCandidate signatures: {f.GetProperty("CandidateCount").GetInt32()} · patch eligible for active package: {f.GetProperty("PatchEnabled").GetBoolean()}\n{f.GetProperty("Signature").GetString()}");
             DriverDetails.Text=string.Join("\n\n",details);
-            OverrideStatus.Text=routingReady?"Developer routing is enabled. It affects .local handling machine-wide.":"Developer routing is disabled or a restart is required.";
+            OverrideStatus.Text=RoutingPresentation.Status(d.GetProperty("DeveloperOverride").GetBoolean(),d.GetProperty("RebootRequired").GetBoolean());
             bool changedSinceLastReview=false;
             string baseline=Path.Combine(store.Root,"last-qualified-driver.json");
             if(File.Exists(baseline)){try{if(new FileInfo(baseline).Length>65536)throw new InvalidDataException("Previous review is too large.");using var old=JsonDocument.Parse(File.ReadAllText(baseline));changedSinceLastReview=old.RootElement.GetProperty("IdentityTag").GetString()!=driverIdentity;}catch(Exception ex){Log("Previous driver review unavailable: "+ex.Message);}}
@@ -215,6 +216,7 @@ public partial class MainWindow : Window {
         ApplyButton.IsEnabled=!busy&&supported&&driverOriginal&&routingReady&&(configured||setupState?.CanPrepare==true)&&!NeedsControlObservation();
         RestoreButton.IsEnabled=!busy&&selected?.SupportedExecutable!=null&&recordValid&&selectedReceipt?.Status!="removed";LaunchButton.IsEnabled=!busy&&selected!=null;ImportButton.IsEnabled=!busy&&selected!=null;CapChoice.IsEnabled=!busy&&supported;
         RestoreButton.Content=recordValid&&selectedReceipt!=null&&setupState?.FolderExists==false&&selectedReceipt.Status!="removed"?"Clear failed setup record":"Use system driver again";
+        if(setupState?.FolderExists==true&&!routingReady)LaunchButton.IsEnabled=false;
         if(setupState?.FolderExists==true&&(!configured||!driverOriginal))LaunchButton.IsEnabled=false;
         ApplyButton.Content=NeedsControlObservation()?"Play in DX12 to finish step 2":configured?"Apply selected limit":"Set up original private copy";
 
@@ -300,6 +302,7 @@ public partial class MainWindow : Window {
             if(game.SupportedExecutable!=null) {
                 var state=GameSetupState.FromReply(await Engine(new("GameState",game.SupportedExecutable,store.Receipt(id))));
                 if(state.FolderExists) {
+                    if(!routingReady)throw new InvalidOperationException("Enable Use private drivers in Settings and restart Windows before launching this private setup. To play with the system driver, use Use system driver again first.");
                     if(!driverOriginal)throw new InvalidOperationException("Driver compatibility needs review. Check new DLLs or return this game to the system driver first.");
                     if(!game.Supported)throw new InvalidOperationException("Game executable changed. Return its private set to stock before launching for rediscovery.");
                     if(state.CompatibilityRepairRequired)throw new InvalidOperationException("This private setup needs a compatibility update. Use system driver again, then prepare a fresh original 512 MiB copy before launching.");
@@ -323,11 +326,11 @@ public partial class MainWindow : Window {
         await Run("Reading the selected Steam folder…",LoadLibrary);
     }
     async void EnableRouting(object sender,RoutedEventArgs e) {
-        if(!await Confirm("Enable Windows developer routing","This sets the machine-wide DevOverrideEnable value to 1 and saves its previous value. Manually run the app as administrator first. Restart Windows afterward. Integrity enforcement and driver files remain unchanged.","Enable and record previous value"))return;
+        if(!await Confirm("Enable private drivers","Required for per-game cache limits. This one-time Windows setting lets games use the private copies beside their executable. It also affects other apps with .local setups. Your installed Intel driver stays unchanged; Windows integrity enforcement stays enabled. Run this app as administrator yourself, confirm here, then restart Windows. The previous setting is saved for recovery.","Enable private drivers"))return;
         await Run("Enabling developer routing with explicit consent…",async()=>{await Engine(new("EnableOverride",Confirmed:true));await LoadDriver();});
     }
     async void RestoreRouting(object sender,RoutedEventArgs e) {
-        if(!await Confirm("Restore the previous Windows setting","Remove your private game sets first. Restore the original developer-routing value from the saved receipt? Manually run as administrator. Restart Windows afterward.","Restore previous value"))return;
+        if(!await Confirm("Restore the previous Windows setting","For one game, use Use system driver again on its game page instead. To restore the Windows setting for all apps, remove your private game setups first. Run this app as administrator yourself and restart Windows afterward. This restores the saved previous value, which may already have been enabled. It does not delete shader caches.","Restore previous value"))return;
         await Run("Restoring the previous developer setting…",async()=>{await Engine(new("RestoreOverride",Confirmed:true));await LoadDriver();});
     }
     async void ChooseScsCli(object sender,RoutedEventArgs e) {

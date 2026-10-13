@@ -1,4 +1,4 @@
-namespace ArcCache.Core;
+﻿namespace ArcCache.Core;
 
 // Disk installation and runtime observation are independent states.
 public sealed record SetupPresentation(string Installed, string Title, string Next, bool WaitingForControl) {
@@ -11,7 +11,7 @@ public sealed record SetupPresentation(string Installed, string Title, string Ne
         if (state?.Configured == true && state.Receipt is { } receipt) {
             string installed = $"{Limit(receipt.MiB)} installed · private driver files verified";
             if(!driverCompatible)return new($"{Limit(receipt.MiB)} saved · driver review required","Review the updated driver","Check new DLLs above, or use the system driver again. Your saved limit is retained.",false);
-            if(!routingReady)return new($"{Limit(receipt.MiB)} saved · routing inactive","Private routing is off or needs a restart","The saved private files are present. Check private routing in Settings and restart Windows when requested. Use the loaded-driver check to see what a running game actually loaded.",false);
+            if(!routingReady)return new($"{Limit(receipt.MiB)} saved · routing inactive","Enable private drivers","Open Settings, enable Use private drivers and restart Windows. Your saved files remain; their presence does not prove the game loaded them.",false);
             if (!detected) return new(installed, "Game update needs attention", "Return to the system driver before detecting this game's updated executable.", false);
             bool control = receipt.MiB == 512 && receipt.Status != "original-control-loading-verified";
             if (control) return new(installed, "Step 2 of 3 · Test the original copy", "Play through Steam in DX12. Keep this app open; it checks loading automatically. Close the game when the check completes.", true);

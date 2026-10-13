@@ -1,6 +1,11 @@
-> Experimental branch: see [larger-cache build and test instructions](../intel-cache-large-research/README.md). The 8/16 GiB variants are unverified in gameplay and preserve whole-file RAM allocation. Use the WinUI experimental executable for larger-cap installation and rollback.
+# Arc Cache — large-cache experimental preview
 
-# Arc Cache — WinUI 3 Steam companion
+**Start with [the quick start](docs/QUICKSTART.md).** Read [Use private drivers explained](docs/PRIVATE-DRIVERS.md) before enabling the Windows setting. Download both variants from [GitHub Releases](https://github.com/nyannoying1337/SCSKiller/releases).
+
+This branch builds `ArcCache.Experimental.exe`. It additionally supports experimental 8/16 GiB presets and read-only active-driver update review; see [larger-cap documentation](../intel-cache-large-research/README.md). These are unsigned previews. Capacity effects are unmeasured; Ready or Not menu loading was confirmed with the repaired original, 1 GiB and 4 GiB setups. Unknown drivers stay blocked. App-only releases use a separately installed SCSKiller CLI.
+
+The detailed notes below include earlier investigation results. The quick start and version-specific research notes describe the current supported workflow.
+
 
 A separate, unpackaged x64 WinUI 3 application for verified Intel Arc private-driver profiles. The existing SCSKiller app and unrelated functionality are not changed. Installed Steam titles are discovered locally across Steam libraries; no API key, sign-in or network image download is required. Artwork uses Steam's local cache.
 
@@ -8,7 +13,7 @@ A separate, unpackaged x64 WinUI 3 application for verified Intel Arc private-dr
 
 1. **Your games:** search installed Steam titles, select a game, inspect its private setup and launch it through Steam. Games are identified automatically from their running DX12 process and original Intel driver. New titles need no compiled app entry; all new private setups are experimental. No generic multiplayer/anti-cheat guarantee is made.
 2. **Set up original private copy:** after explicit confirmation, copy the 27 hash-pinned original driver files (about 608 MiB). The game must be closed, the system B580 driver must be original, the automatically observed game executable hash must match, and existing local D3D12 proxies must be disabled by the user. Unknown driver packages are refused; changed game builds require automatic rediscovery.
-3. Launch the original private control in DX12; its loaded driver path and disk hash are checked automatically. **Apply selected limit** offers 1 GiB (gameplay tested), 2 GiB and 4 GiB (experimental constructor patches). 512 MiB restores original private bytes. Every change requires confirmation; leaving the original control requires its automatically observed loading result. No gameplay-test checkbox is required. Wide patches are checked by isolated native execution and full-image hashes, but their game loading and cache-growth effect are untested.
+3. Launch the original private control in DX12; its loaded driver path and disk hash are checked automatically. **Apply selected limit** offers 1 GiB (gameplay tested), 2 GiB and 4 GiB (experimental constructor patches). 512 MiB restores original private bytes. Every change requires confirmation; leaving the original control requires its automatically observed loading result. No gameplay-test checkbox is required. Wide patches are checked by isolated native execution and full-image hashes. Ready or Not menu loading was confirmed at 4 GiB; the cache-growth effect remains unmeasured.
 4. **Check loaded driver:** native, read-only module enumeration reports paths and disk hashes. **Return game to stock:** validate the entire receipt and remove only the owned private files. Altered or extra contents stop removal. Import accepts a schema-3 matched-set receipt for that exact game install, and never overwrites an existing record.
 
 **Driver** verifies the currently registered B580 package. The WinUI tool does not replace global driver files. The earlier WinForms recovery utility remains separate. **Activity** records actions/results in `%LOCALAPPDATA%\IntelArcCacheCap\logs`. Per-game recovery records are in `%LOCALAPPDATA%\IntelArcCacheCap\games`.
@@ -31,7 +36,7 @@ After explicit preparation, the app observes the original 512 MiB private contro
 
 
 
-Generic discovery was exercised against the running Ready or Not DX12 process on the test PC. Its shipping executable and original Xe2 path/hash were recorded automatically, and Steam declared multiplayer/co-op. No private Ready or Not set was installed in that test. Automatic original-private loading verification and new-game install/rollback remain implemented but untested against a real new game.
+Generic discovery was exercised against the running Ready or Not DX12 process on the test PC. Its shipping executable and original Xe2 path/hash were recorded automatically, and Steam declared multiplayer/co-op. That initial discovery test did not install a set. Later user tests confirmed repaired private-copy loading at original 512 MiB, 1 GiB and 4 GiB. Automatic discovery/loading checks still do not prove shader capacity.
 
 
 
