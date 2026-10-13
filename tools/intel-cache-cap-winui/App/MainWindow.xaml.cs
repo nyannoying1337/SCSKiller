@@ -10,6 +10,8 @@ using System.Runtime.InteropServices.WindowsRuntime;
 namespace ArcCache;
 public partial class MainWindow : Window {
     readonly AppStore store=new();
+    DiagnosticLog? diagnostics;
+    bool initializingDiagnostics;
     readonly SafetyClient safety=new(Path.Combine(AppContext.BaseDirectory,"ArcCache.SafetyEngine.exe"));
     IReadOnlyList<SteamGame> games=[];
     SteamGame? selected;
@@ -30,6 +32,9 @@ public partial class MainWindow : Window {
     int foregroundRuns, backgroundPolls, previewWatchSeconds;
     public MainWindow() {
         InitializeComponent();ExtendsContentIntoTitleBar=true;SetTitleBar(TitleArea);
+        diagnostics=new DiagnosticLog(store.Root,Environment.GetCommandLineArgs().Contains("--debug"));
+        safety.Diagnostic=diagnostics.Write;initializingDiagnostics=true;DiagnosticToggle.IsOn=diagnostics.Enabled;initializingDiagnostics=false;
+        diagnostics.Write("session-start",new{Version=typeof(MainWindow).Assembly.GetName().Version?.ToString(),OS=Environment.OSVersion.ToString(),Runtime=Environment.Version.ToString(),Variant=typeof(MainWindow).Assembly.GetName().Name});
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1320,940));Nav.SelectedItem=LibraryNav;
         AppWindow.Closing+=(_,e)=>{if(busy)e.Cancel=true;else{discoveryTimer.Stop();StopCacheMonitor();}};
         Root.Loaded+=async (_,_)=>await Run("Reading your Steam library…",LoadLibrary);
@@ -57,16 +62,23 @@ public partial class MainWindow : Window {
             Close();
         };
     }
+    void DiagnosticToggled(object sender,RoutedEventArgs e) {
+        if(initializingDiagnostics||diagnostics==null)return;
+        try{diagnostics.SetEnabled(DiagnosticToggle.IsOn);Log(diagnostics.Enabled?"Detailed diagnostics enabled. Files stay local; review them before sharing.":"Detailed diagnostics disabled. Existing logs are retained.");}
+        catch(Exception error){Log("Diagnostic setting could not be saved: "+error.Message);initializingDiagnostics=true;DiagnosticToggle.IsOn=diagnostics.Enabled;initializingDiagnostics=false;}
+    }
+    void OpenLogs(object sender,RoutedEventArgs e) {
+        try{Process.Start(new ProcessStartInfo("explorer.exe"){UseShellExecute=true,ArgumentList={System.IO.Path.GetDirectoryName(store.LogPath)!}});}catch(Exception error){Log("Could not open logs: "+error.Message);}
+    }
     void Log(string text){store.Log(text);ActivityLog.Text+=DateTime.Now.ToString("HH:mm:ss ")+text+Environment.NewLine;}
     async Task Run(string label,Func<Task> action) {
         if(busy)return;foregroundRuns++;busy=true;Nav.IsEnabled=false;GlobalNotice.IsOpen=false;BusyRing.Visibility=Visibility.Visible;BusyRing.IsActive=true;FooterStatus.Text=label;Log(label);
         UpdateButtons();
         try{await action();FooterStatus.Text="Finished · result recorded in Activity";}
-        catch(Exception e){Log("Stopped: "+e.Message);FooterStatus.Text="Stopped · no further changes attempted";GlobalNotice.Severity=InfoBarSeverity.Warning;GlobalNotice.Title="Action stopped";GlobalNotice.Message=e.Message;GlobalNotice.IsOpen=true;}
+        catch(Exception e){diagnostics?.Write("action-error",new{Action=label,Error=e.ToString()});Log("Stopped: "+e.Message);FooterStatus.Text="Stopped · no further changes attempted";GlobalNotice.Severity=InfoBarSeverity.Warning;GlobalNotice.Title="Action stopped";GlobalNotice.Message=e.Message;GlobalNotice.IsOpen=true;}
         finally{busy=false;Nav.IsEnabled=true;BusyRing.IsActive=false;BusyRing.Visibility=Visibility.Collapsed;UpdateButtons();}
     }
     async Task<WorkerReply> Engine(WorkerRequest request) {
-        if(request.Action=="GameState")Log("Receipt request: "+JsonSerializer.Serialize(request));
         WorkerReply reply=await safety.RunAsync(request);Log(reply.Message);if(!reply.Ok)throw new InvalidOperationException(reply.Message);return reply;
     }
     async Task LoadLibrary() {
@@ -247,7 +259,7 @@ public partial class MainWindow : Window {
     }
     async void ToggleCacheMonitor(object sender,RoutedEventArgs e) {
         if(cacheMonitor!=null&&!cacheMonitor.HasExited){StopCacheMonitor();Log("Cache monitor stopped.");return;}
-        if(selected?.Supported!=true){GlobalNotice.Title="Select a pinned DX12 profile";GlobalNotice.Message="This monitor requires a known game executable path and hash.";GlobalNotice.IsOpen=true;return;}
+        if(selected?.Supported!=true){GlobalNotice.Title="Select a pinned DX12 profile";GlobalNotice.Message="Launch this game in DX12 first so its executable can be detected.";GlobalNotice.IsOpen=true;return;}
         string exe=selected.SupportedExecutable!;
         await Run("Starting the read-only cache overlay…",async()=>{
             StopCacheMonitor();var info=new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory,"ArcCache.SafetyEngine.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};

@@ -5,6 +5,21 @@ int passed=0;
 void Check(bool yes,string message){if(!yes)throw new Exception(message);}
 void Test(string name,Action body){body();passed++;Console.WriteLine("PASS "+name);}
 void Reject(Action body){try{body();}catch(InvalidDataException){return;}throw new Exception("Expected rejection.");}
+Test("Opt-in diagnostics are local, persist preference, rotate and stop when disabled",()=>{
+    string root=Path.Combine(Path.GetTempPath(),"ArcDiagnostics-"+Guid.NewGuid().ToString("N"));
+    try {
+        var log=new DiagnosticLog(root);log.Write("off",new{Value=1});Check(!File.Exists(log.Path),"Disabled logging wrote data.");
+        log.SetEnabled(true);log.Write("fixture",new{Action="Status"});
+        Check(File.ReadLines(log.Path).All(line=>JsonDocument.Parse(line).RootElement.TryGetProperty("utc",out _)),"Invalid JSON lines.");
+        Check(new DiagnosticLog(root).Enabled,"Preference was not retained.");
+        File.WriteAllText(log.Path,new string('x',2*1024*1024));log.Write("rotate",new{Value=1});
+        Check(File.Exists(log.Path+".previous")&&new FileInfo(log.Path).Length<1024,"Diagnostics failed to rotate.");
+        log.SetEnabled(false);long size=new FileInfo(log.Path).Length;log.Write("off",new{Value=2});Check(new FileInfo(log.Path).Length==size&&!new DiagnosticLog(root).Enabled,"Disabled log kept recording.");
+        Check(new DiagnosticLog(root,true).Enabled,"--debug session mode ignored.");
+        Check(!new DiagnosticLog(root).Enabled,"Session mode persisted itself.");
+    }finally{if(Directory.Exists(root))Directory.Delete(root,true);}
+});
+
 Test("Inactive routing preserves the saved limit and gives an enable action",()=>{
     var receipt=new ReceiptState(3,"game.exe","game.exe.local",4096,"changed-runtime-unverified",new());
     var ui=SetupPresentation.From(new GameSetupState(true,true,true,true,receipt,null),true,false);

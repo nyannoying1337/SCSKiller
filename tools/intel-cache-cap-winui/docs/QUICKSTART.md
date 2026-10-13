@@ -38,3 +38,7 @@ The user confirmed Witcher 3 gameplay with a private copy and Ready or Not menu 
 2/4 GiB constructors, patch hashes, tamper rejection, receipts/recovery, semantic ACL equality, consent gates, Steam fixtures, and quiet UI polling have automated checks. Actual capacity/growth effects remain unmeasured. 8/16 GiB passed isolated B580 D3D12 device/pipeline creation probes and reload-wrapper/unwind tests, **not** large-cache gameplay/reload. Very large files can require roughly their file size in contiguous RAM: the larger patch does not implement a low-memory Intel parser.
 
 For source build/test instructions see [the app README](../README.md). Proprietary DLL test inputs are optional local files, not shipped fixtures.
+
+## Troubleshooting logs
+
+Settings → Troubleshooting offers opt-in detailed local logging and Open logs folder. `--debug` enables session-only diagnostics. See [troubleshooting](TROUBLESHOOTING.md) for privacy, rotation and report instructions. No automatic upload. Normal discovery/monitoring uses the selected game, not a Witcher-only restriction.
