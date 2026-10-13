@@ -5,7 +5,11 @@ namespace ArcCache.Core;
 public sealed record WorkerRequest(string Action, string? Executable=null, string? ReceiptPath=null, string? DriverFolder=null, int MiB=512, bool Confirmed=false, string? SourceReceipt=null, uint SteamAppId=0, string? InstallDirectory=null, bool RiskConfirmed=false, bool ReadOnly=false);
 public sealed record WorkerReply(bool Ok, string Message, JsonElement Data);
 public sealed class SafetyClient(string workerPath) {
+    public Action<string,object>? Diagnostic {get;set;}
+    void Trace(string kind,object value){try{Diagnostic?.Invoke(kind,value);}catch{}}
     public async Task<WorkerReply> RunAsync(WorkerRequest request) {
+        var watch=Stopwatch.StartNew();Trace("worker-request",request);
+        try {
         var info=new ProcessStartInfo(workerPath) {UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
         using var process=Process.Start(info)??throw new IOException("The safety engine could not start.");
         Task<string> output=process.StandardOutput.ReadToEndAsync(),errors=process.StandardError.ReadToEndAsync();
@@ -14,7 +18,9 @@ public sealed class SafetyClient(string workerPath) {
         if(string.IsNullOrWhiteSpace(raw))throw new IOException("The safety engine stopped without a result. "+stderr);
         var reply=JsonSerializer.Deserialize<WorkerReply>(raw,new JsonSerializerOptions{PropertyNameCaseInsensitive=true})??throw new IOException("Invalid safety-engine response.");
         if(process.ExitCode!=0&&reply.Ok)throw new IOException("The engine exited unexpectedly. Inspect the recovery receipt before retrying.");
+        Trace("worker-result",new{Action=request.Action,ElapsedMs=watch.ElapsedMilliseconds,ExitCode=process.ExitCode,reply.Ok,reply.Message,reply.Data,Stderr=stderr});
         return reply;
+        }catch(Exception e){Trace("worker-error",new{Action=request.Action,ElapsedMs=watch.ElapsedMilliseconds,Error=e.ToString()});throw;}
     }
 }
 public sealed record ReceiptState(int Schema,string Executable,string Folder,int MiB,string Status,Dictionary<string,string> Files);

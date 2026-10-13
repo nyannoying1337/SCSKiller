@@ -89,8 +89,8 @@ class Worker {
         }
         if(previous==null&&r.SteamAppId==292030) {
             string legacy=Path.Combine(root,@"bin\x64_dx12\witcher3.exe");
-            if(File.Exists(legacy)&&IsolationControl.FileHash(legacy)==MatchedSet.GameHash)return new{Validated=true,Executable=legacy,Message="Existing Witcher DX12 profile recognized; known executable hash matches."};
-            if(Directory.Exists(legacy+".local"))return new{Validated=false,Executable=legacy,Message="Witcher updated. Return its private set to stock, then launch DX12 for automatic rediscovery."};
+            if(File.Exists(legacy)&&IsolationControl.FileHash(legacy)==MatchedSet.GameHash)return new{Validated=true,Executable=legacy,Message="Existing DX12 profile recognized; executable verified."};
+            if(Directory.Exists(legacy+".local"))return new{Validated=false,Executable=legacy,Message="The game updated. Use the system driver again, then launch DX12 for automatic detection."};
         }
         if(previous!=null) {
             previousExe=MatchedSet.ProfileExecutable(previous);

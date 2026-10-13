@@ -18,7 +18,7 @@ The routing setting now says **Use private drivers** and explains when it is req
 
 User tests confirmed Witcher 3 gameplay and repaired Ready or Not menu loading at original 512 MiB, 1 GiB and 4 GiB. Paths/disk hashes were observed; cache-capacity/growth effects remain **unmeasured**. 8/16 GiB passed isolated B580 device/pipeline probes and wrapper/unwind checks, not large-cache gameplay/reload. A large cache can consume roughly its file size in contiguous RAM; the patch does not implement a low-memory Intel parser.
 
-Current source builds pass 26 core/worker/bridge checks, 27 larger-patch/native-wrapper checks, 10 catalogue checks and 5 isolated Xe3 constructor checks. Both actual routing screens were rendered and inspected. Read-only checks did not install new game or system patches.
+Current source builds pass 27 core/worker/bridge checks, 27 larger-patch/native-wrapper checks, 10 catalogue checks and 5 isolated Xe3 constructor checks. Both actual routing screens were rendered and inspected. Read-only checks did not install new game or system patches.
 
 The optional SCSKiller bridge remains **stock-driver-only**; private-cap compilation and simultaneous recorder compatibility are unresolved. Community access needs the existing account/settings and a CLI with `--community` support (the standard branch includes its source). The overlay is external, without injection, and reports shared cache size rather than proven game-specific growth; exclusive fullscreen is unverified. The app can be closed after setup unless using the overlay.
 
@@ -27,3 +27,7 @@ The optional SCSKiller bridge remains **stock-driver-only**; private-cap compila
 Close the game and choose **Use system driver again**. Files/receipt must verify; extra or altered files stop removal. Keep receipts/backups. Shader caches are preserved. Use the experimental app to roll back 8/16 GiB; standard rejects those images. Do not run both apps together because they share recovery data. No proprietary Intel or Windows debug-helper DLLs are distributed.
 
 [Source and build instructions](https://github.com/nyannoying1337/SCSKiller/tree/intel-cache-large-experimental/tools/intel-cache-cap-winui) · [Experimental research/build notes](https://github.com/nyannoying1337/SCSKiller/tree/intel-cache-large-experimental/tools/intel-cache-large-research).
+
+## Troubleshooting logs
+
+Settings → Troubleshooting offers opt-in detailed local logging and Open logs folder. `--debug` enables session-only diagnostics. See [troubleshooting](TROUBLESHOOTING.md) for privacy, rotation and report instructions. No automatic upload. Normal discovery/monitoring uses the selected game, not a Witcher-only restriction.
