@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><AssemblyName>ArcCache</AssemblyName><RootNamespace>ArcCache</RootNamespace>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework><TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <Platforms>x64</Platforms><PlatformTarget>x64</PlatformTarget><RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI><WindowsPackageType>None</WindowsPackageType><WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained><EnableMsixTooling>true</EnableMsixTooling>
+    <ApplicationManifest>app.manifest</ApplicationManifest><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.5.1" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.9" />
+    <ProjectReference Include="..\Core\ArcCache.Core.csproj" />
+    <Content Include="..\Worker\bin\ArcCache.SafetyEngine.exe" Link="ArcCache.SafetyEngine.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\Worker\ArcCache.SafetyEngine.exe.config" Link="ArcCache.SafetyEngine.exe.config" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="BuildSafetyWorker" BeforeTargets="PrepareForBuild">
+    <MakeDir Directories="$(MSBuildProjectDirectory)\..\Worker\bin" />
+    <Exec Command="&quot;$(WINDIR)\Microsoft.NET\Framework64\v4.0.30319\csc.exe&quot; /nologo /target:exe /platform:x64 /optimize+ /win32manifest:&quot;$(MSBuildProjectDirectory)\app.manifest&quot; /out:&quot;$(MSBuildProjectDirectory)\..\Worker\bin\ArcCache.SafetyEngine.exe&quot; /reference:System.dll /reference:System.Core.dll /reference:System.Web.Extensions.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll &quot;$(MSBuildProjectDirectory)\..\Worker\Worker.cs&quot; &quot;$(MSBuildProjectDirectory)\..\Worker\CacheMonitor.cs&quot; &quot;$(MSBuildProjectDirectory)\..\..\intel-cache-cap-gui\Engine.cs&quot; &quot;$(MSBuildProjectDirectory)\..\..\intel-cache-cap-gui\WindowsPlatform.cs&quot; &quot;$(MSBuildProjectDirectory)\..\..\intel-cache-cap-gui\Isolation.cs&quot; &quot;$(MSBuildProjectDirectory)\..\..\intel-cache-cap-gui\IsolationControl.cs&quot; &quot;$(MSBuildProjectDirectory)\..\..\intel-cache-cap-gui\MatchedSet.cs&quot; &quot;$(MSBuildProjectDirectory)\..\..\intel-cache-cap-gui\Safety\GameSafety.cs&quot;" />
+  </Target>
+</Project>

@@ -3255,7 +3255,13 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved) {
     wchar_t p[MAX_PATH];
     GetSystemDirectoryW(p, MAX_PATH);
     g_real = LoadLibraryW((std::wstring(p) + L"\\d3d12.dll").c_str());
-    if (!g_real) return FALSE;
+    // DevOverrideEnable + exe.local can return this proxy even for an absolute System32 path.
+    // Never resolve real_* back to our exports: that recurses when the first device is created.
+    // This is a fail-closed guard, not support for private-driver redirection.
+    if (!g_real || g_real == self) {
+        SetLastError(ERROR_DLL_INIT_FAILED);
+        return FALSE;
+    }
     // next=<file name>: a mod's d3d12.dll renamed next to us (the app's "record alongside"); every export goes to it first.
     // A bare file name only. If it doesn't load or has no D3D12CreateDevice, the system dll serves alone (the game still runs).
     wchar_t next[64];

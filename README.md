@@ -231,3 +231,14 @@ and can't vouch for a fork that changes that.
 
 Improvements are always welcome back here as pull requests. Fixes, games and ideas from forks make SCSKiller better
 for everyone.
+
+## Intel Arc Cache companion previews
+
+This fork also contains a separate Windows WinUI 3 per-game shader-cache utility. [Download the standard and experimental previews](https://github.com/nyannoying1337/SCSKiller/releases).
+
+| Standard preview | Large-cache experimental preview |
+| --- | --- |
+| [Source and docs: intel-cache-cap](https://github.com/nyannoying1337/SCSKiller/tree/intel-cache-cap/tools/intel-cache-cap-winui) | [Source and docs: intel-cache-large-experimental](https://github.com/nyannoying1337/SCSKiller/tree/intel-cache-large-experimental/tools/intel-cache-large-research) |
+| Original 512 MiB and 1/2/4 GiB presets | Also 8/16 GiB research presets and active-driver update review |
+
+Only the exact qualified Intel B580 Xe2 32.0.101.9034 package is accepted. Xe3 remains research-only. Private routing requires a one-time, explicitly confirmed Windows setting and restart; it does not replace the installed system driver or disable enforcement. Read the app's quick start, routing and rollback documentation. Cache-capacity effects and general game compatibility are not established. Existing SCSKiller shader warming remains stock-driver-only.

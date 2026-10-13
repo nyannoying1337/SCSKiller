@@ -10,8 +10,9 @@ using SCSKiller.Core.Vendors;
 const string Usage = """
     usage: scskiller <command>
       scan [--rescan]                             discover games and show their status (--rescan: redo engine detection)
-      status [game]                               all games, or one in detail
-      compile <game|--all-ready> [--threads N] [--idle | --when-idle] [--careful | --fast]
+      status [game] [--community]                 all games, or one in detail
+      compile <game|--all-ready> [--threads N] [--idle | --when-idle] [--careful | --fast] [--community]
+                                                  --community: use existing SCSKiller sign-in/download setting; no sign-in or uploads
                                                   --idle: background priority; --when-idle: also only while nobody uses the PC;
                                                   --careful (AMD): this and later compiles of the game compile its recorded
                                                   pipelines in passes on few threads, so the driver keeps more of them (slower);
@@ -61,7 +62,7 @@ try
     code = args[0] switch
     {
         "scan" => await Scan(args.Contains("--rescan")),
-        "status" => await Status(args.Length > 1 ? args[1] : null),
+        "status" => await Status(args.Skip(1).FirstOrDefault(a => !a.StartsWith("--"))),
         "compile" => await Compile(),
         "queue" => await QueueShell(),
         "rewarm-stale" => await RewarmStale(args.Contains("--if-driver-changed")),
@@ -108,10 +109,19 @@ static bool Confirm(string question)
     return false;
 }
 
-static async Task<ScsKiller> Open(bool rescan = false)
+static async Task<ScsKiller> Open(bool rescan = false, bool community = false)
 {
     var k = ScsKiller.CreateDefault();
     k.Log = new StderrLog();   // synchronous: a message logged just before exit still prints
+    if (community)
+    {
+        // Explicit CLI/companion opt-in; normal CLI behavior remains unchanged.
+        // No recorder management or Sharing service is enabled by this connection.
+        var account = new Account(AppStore.DefaultDir);
+        k.Community = new Community(AppStore.DefaultDir, account.GetDbTokenAsync);
+        if (!account.SignedIn) Console.Error.WriteLine("Community downloads need an existing SCSKiller sign-in; local recordings still work.");
+        if (!k.Settings.UseCommunityDb) Console.Error.WriteLine("Community downloads are disabled in SCSKiller Settings.");
+    }
     await (rescan ? k.RescanAsync(CancellationToken.None) : k.ScanAsync(CancellationToken.None));
     return k;
 }
@@ -170,7 +180,8 @@ async Task<int> Scan(bool rescan)
 
 async Task<int> Status(string? query)
 {
-    var k = await Open();
+    Only("--community");
+    var k = await Open(community: args.Contains("--community"));
     if (query == null)
     {
         foreach (var s in k.Games)
@@ -320,9 +331,9 @@ async Task<int> CacheClear()
 async Task<int> Compile()
 {
     if (args.Length < 2) return Fail("compile <game|--all-ready> [--threads N] [--idle | --when-idle] [--careful | --fast]");
-    Only("--all-ready", "--threads", "--idle", "--when-idle", "--careful", "--fast");
+    Only("--all-ready", "--threads", "--idle", "--when-idle", "--careful", "--fast", "--community");
     int? threads = Opt("--threads") is { } t ? int.TryParse(t, out var n) && n > 0 ? n : throw new ArgumentException("--threads takes a number of threads") : null;
-    var k = await Open();
+    var k = await Open(community: args.Contains("--community"));
     if (threads != null) k.ThreadsOverride = threads;
     bool whenIdle = args.Contains("--when-idle");
     k.Background = args.Contains("--idle");
