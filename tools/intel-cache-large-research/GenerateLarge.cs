@@ -1,0 +1,2 @@
+using System;using System.IO;using ArcCap;
+class GenerateLarge {static int Main(string[] args){try{var original=File.ReadAllBytes(args[0]);foreach(int mib in new[]{8192,16384}){byte[] data=LargeCachePatch.Build(original,mib);string path=Path.Combine(args[1],"experimental-"+mib+".dll");File.WriteAllBytes(path,data);Console.WriteLine(mib+" "+Engine.Hash(data));}return 0;}catch(Exception e){Console.WriteLine(e);return 1;}}}

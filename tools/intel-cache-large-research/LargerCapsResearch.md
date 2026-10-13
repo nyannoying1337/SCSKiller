@@ -1,3 +1,7 @@
+# Historical tracing notes and experimental delivery
+
+Earlier sections describe the investigation at that stage. The delivery section below supersedes statements that the experimental catalogue has no 8/16 GiB options. The separate normal branch remains unchanged.
+
 # Limits above 4 GiB: research findings (2026-10-13)
 
 Status: isolated instruction tests passed; NOT an enabled app feature and NOT a validated cache-capacity increase. No game, installed driver, private setup, registry, or enforcement setting was changed for this investigation.
@@ -78,3 +82,20 @@ The research files now live on the separate `intel-cache-large-experimental` bra
 The native bounded-reader test read and verified every byte of a real sparse 8 GiB + 4096-byte file. Its reader buffer is 1 MiB (plus a separate 1 MiB expected-data test buffer), independent of file length. Marker data crosses 4 GiB and appears above 8 GiB. The test file occupied 262,144 bytes on disk after flushing and was deleted on close; no game/cache/system file was accessed. Thirteen checks passed including cancellation, partial transfers, consumer stop, EOF, I/O errors, overflow and cleanup. Pending Win32 I/O is completed before buffer reuse using one reusable completion event.
 
 This test eliminates a basic Windows-I/O feasibility question. It does not implement Intel parser integration, prove real shader cache growth, or establish shader entry pointer lifetimes. The app's accepted cap catalogue is unchanged.
+
+## Testable experimental delivery (2026-10-13)
+
+The branch now contains the WinUI app source, cloned from the pending cache-tool work in the normal checkout without unrelated CLI/proxy changes. The experimental executable is ArcCache.Experimental.exe. It offers 8/16 GiB with explicit experimental/RAM consent, known-image-only validation and private-copy rollback. Those experimental changes do not affect the normal branch's source or catalogue.
+
+The implementation deliberately preserves contiguous allocation and parser ownership. It therefore does not claim bounded RAM use. It raises both constructor fields and replaces only the full-cache read call with an appended assembly loop that calls the original read helper for <=256 MiB at a time. The original async/error handling is reused. MASM generated code/unwind data; the existing exception table is copied unchanged and extended by one sorted RUNTIME_FUNCTION; a valid PE checksum is computed. Full normalization restores the original SHA; exact deterministic payload output hashes are pinned:
+
+- 8 GiB: BF74F45935E6BEB8B958728F96D49E7384C99ACEE0B82247981A1FC820C7405C
+- 16 GiB: D7B7D5092232165AA2B37A181FD0940C5167C2EEFD1D696FCAC83C1159CB3132
+
+Eight native wrapper checks pass, including partial/zero transfers and Windows exception unwinding. Nineteen patch checks pass, including byte-identical 4 GiB/stock rollback, unrelated/payload/unwind mutation rejection and Windows PE mapping/function metadata lookup without driver execution. Independent PE parsing confirms checksum and sorted table preservation. A separate temporary full-cohort install test passes six checks for 8 GiB install, ACL equivalence, before/after DLL+receipt backups, 4 GiB reversion and stock removal. No actual game installation was changed in these tests.
+
+A subsequent native D3D12 probe DID execute the experimental Intel user-mode driver from its own .exe.local test folder. B580 was explicitly selected; no UHD fallback was allowed. Both the 8 GiB and 16 GiB copies loaded at the expected private path, with independently confirmed disk hashes, and D3D12CreateDevice plus CreateComputePipelineState returned S_OK. The probe compiled one trivial compute shader and did not dispatch GPU work or launch a game. This may create a small cache entry for the probe itself. No driver/system file or enforcement setting was changed. Initial path matching incorrectly treated Windows' .Local casing as different; this was corrected to exact case-insensitive path comparison and the probe rerun successfully.
+
+This establishes device/pipeline startup compatibility for the probe, not game compatibility, large-file shader serialization, cache growth beyond 4 GiB or real large-cache reload correctness. Those remain unverified. Whole-file allocation and memory pressure remain explicit limitations.
+
+The read-only desktop overlay now accepts any detected game executable rather than a hardcoded Witcher process name. It reports process private/working-set memory, observed driver path/qualified disk cap, shared Intel cache disk size/net growth and read failures. It uses 2-second samples and 10-second module observations; a qualified disk cap is cached once per observed module path. No injection/hooks/elevation. Borderless/windowed games are the supported display case; arbitrary exclusive fullscreen compatibility is not claimed.

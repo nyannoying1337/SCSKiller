@@ -1,23 +1,41 @@
-# Larger Intel cache: isolated research
+# Arc Cache: larger-cap experimental build
 
-Branch: `intel-cache-large-experimental`. This checkout starts from SCSKiller commit `4b9cd3e` and contains only this research folder. The working WinUI app, its pending UI changes, driver catalogue, and game installations are untouched. There is no larger-cap installer, injection DLL, or enabled 8/16 GiB app option here.
+Branch `intel-cache-large-experimental`. The normal `intel-cache-cap` checkout and its uncommitted changes remain separate. This branch now includes the native WinUI app and safety worker source under the adjacent `intel-cache-cap-winui` / `intel-cache-cap-gui` folders. No unrelated CLI or proxy changes were carried over.
 
-## Implemented
+## Build the app
 
-- `BoundedCacheReader.h`: native C++ Windows reader with 64-bit offsets and bounded buffers. One reusable completion event; pending I/O completes before buffer reuse. Cancellation is checked between chunks. Premature EOF, I/O failure, invalid transfer counts, invalid bounds and consumer stops are explicit results. File handles are borrowed, never closed by the reader.
-- `BoundedCacheReaderTests.cpp`: real sparse-file test of an 8 GiB + 4096-byte file, with sentinels crossing the 4 GiB boundary. Every byte is verified with a 1 MiB reader buffer and a separate 1 MiB expected-data buffer. The temporary file uses delete-on-close and cleanup is verified. No driver is loaded or patched. The test declines to create a large non-sparse file when sparse support is unavailable.
-- Original-byte probes and `LargerCapsResearch.md`: evidence for the cap constructor, separate budget check, whole-file allocation and DWORD read truncation. Those probes intentionally stub external calls and do not exercise a complete driver.
+Install .NET 10 SDK and the Windows SDK, then run from the repository root:
 
-## Run the reader tests
+```
+dotnet publish tools/intel-cache-cap-winui/App/ArcCache.WinUI.csproj -c Release -p:Platform=x64 -o out/ArcCache-Large-Experimental
+```
 
-Use an x64 MSVC developer command prompt and run `build-reader-tests.cmd` from this folder. The script also tries the installed VS2022 BuildTools default path if `cl` is absent. Generated executables and objects stay in ignored `bin/`. Tests need a Windows temporary directory on a filesystem supporting sparse files. No administrator rights or enforcement changes are required.
+The app compiles the x64 safety worker using the installed .NET Framework compiler. Windows App SDK and .NET runtime are published self-contained. The executable is `ArcCache.Experimental.exe`. No Intel or Windows driver DLL is redistributed: a matching installed package is copied locally only after explicit setup consent.
 
-Verified locally on 2026-10-13: 13 checks pass; 8,589,938,688 bytes read in 8193 chunks, sparse disk allocation 262,144 bytes. This is synthetic file I/O evidence, not shader-cache capacity evidence.
+## Test tomorrow
 
-## Integration requirements
+1. Close the game and the older Arc Cache app. Open `ArcCache.Experimental.exe`.
+2. Select a game with a working private setup. Choose 8 GiB first and apply after reading the separate experimental consent. If starting fresh, prepare/test the unchanged original copy before applying a limit.
+3. Launch DX12 in single-player/offline mode. Click Show live overlay; use borderless/windowed display.
+4. Check the loaded driver with the app. The overlay shows observed private/system path, qualified disk cap, private committed process memory, resident memory and shared Intel cache size/net growth. Module path/disk bytes do not prove the in-memory patch or shader capacity. Shared cache growth is not game-attributed.
+5. Close the game before reverting. Select 4 GiB in THIS experimental app, or Use system driver again. The normal app does not recognize the new experimental images and will fail closed.
 
-The current Intel reload path allocates/zeroes one buffer for the entire cache file and issues a single DWORD-sized ReadFile request. Fixing only the constructor or only the read request does not fix both problems.
+Stop the game if memory climbs rapidly or it hangs. Keep the app open or minimized while displaying the overlay; closing the app stops its owned overlay. Exclusive fullscreen/anti-cheat can prevent a desktop overlay from appearing. There is no game-process injection, keyboard hook, elevation, system driver replacement or enforcement bypass.
 
-The bounded reader's callback may use its buffer only during that callback. Intel's serializer/parser may retain pointers into the original contiguous buffer. Inspect parser constructors, entry lifetimes, shared ownership, asynchronous servicing, exceptions and eviction before replacing that buffer. Choose owned chunks, streaming or a read-only mapping only after establishing the lifetime contract. Mapping also does not guarantee low process working-set use.
+## What changed in the Intel copy
 
-Any eventual binary patch requires exact original hash and instruction qualification, complete code/unwind/relocation review, failure recovery, private-only opt-in test installation, module verification, and real shader entries that survive reload above 4 GiB. Do not bypass Windows enforcement or anti-cheat. No game compatibility or larger-cache claim follows from these prototypes.
+Only exact original Xe2 driver 32.0.101.9034 is accepted, SHA-256 `1A552E471AE986A52D045C4112E1980FB7171AABEBFF93C027A4BBA10A3C6229`.
+
+8/16 GiB raise the constructor's cap AND separate aggregate append budget. They redirect only the full-cache reload call at RVA 0x17B620 to a new 87-byte assembly loop in an appended PE section. The loop calls the original Intel read helper for at most 256 MiB at a time; the original helper still owns asynchronous completion, offset updates and error behavior. MASM-generated unwind metadata is included; the original exception table is preserved verbatim in a copied table with one additional sorted entry. Windows loader mapping and function lookup were tested without executing the driver.
+
+CRITICAL LIMITATION: this patch preserves Intel's contiguous allocation and parser ownership. Loading a file that reaches 8/16 GiB can request and zero roughly 8/16 GiB of RAM, in addition to game memory and other live buffers. Raising a preset does not allocate the whole limit immediately. The separate 1 MiB bounded-reader prototype is NOT substituted for Intel's parser. Both private copies passed an isolated B580 D3D12 device + trivial compute-pipeline creation probe. No real shader cache growth, large-file shader reload or gameplay above 4 GiB is verified.
+
+Each large-cap change stores the previous/next DLL, original ACL and previous receipt under `%LOCALAPPDATA%/IntelArcCacheCap/large-cache-backups`. Output hashes, exact normalized source image, new code, unwind table, copied exception data, headers and checksum are validated. Changed images or unknown drivers are rejected. The app preserves Windows enforcement; a refusal to load is a failed experiment, not a reason to disable enforcement.
+
+## Native and patch tests
+
+`build-reader-tests.cmd`: real sparse-file bounded-read test (13 checks). Reader buffer 1 MiB, separate expected-data buffer 1 MiB, 8 GiB + 4096 bytes verified; fixture occupies 256 KiB and is deleted.
+
+`build-large-tests.cmd [path-to-qualified-original-DLL]`: MASM wrapper tests, including real Windows exception unwinding. With the optional qualified original, also tests exact patch recognition, tamper rejection, byte-identical rollback, Windows PE mapping/function lookup and deterministic cap changes. Test images stay in ignored bin; they are not installed.
+
+See `LargerCapsResearch.md` for the original tracing evidence. Fixed instruction addresses and hashes apply only to this qualified image.
