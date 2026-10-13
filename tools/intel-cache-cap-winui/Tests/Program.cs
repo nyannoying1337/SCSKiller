@@ -21,6 +21,12 @@ Test("Larger setup distinguishes an experimental test from inactive routing",()=
     var inactive=SetupPresentation.From(state,true,false);
     Check(inactive.Installed.StartsWith("8 GiB saved")&&inactive.Installed.Contains("inactive")&&inactive.Next.Contains("restart"),"Disabled routing was presented as an active installed patch.");
 });
+Test("Updated driver preserves saved cap but requires review",()=>{
+    var receipt=new ReceiptState(4,"game.exe","game.exe.local",8192,"changed-runtime-unverified",new());
+    var state=new GameSetupState(true,true,true,true,receipt,null);
+    var ui=SetupPresentation.From(state,true,true,false);
+    Check(ui.Installed.Contains("8 GiB saved")&&ui.Title=="Review the updated driver"&&ui.Next.Contains("system driver"),"Driver update erased setup or presented outdated private driver as ready.");
+});
 Test("Old private setup needing compatibility migration blocks patching without erasing disk state",()=>{
     var receipt=new ReceiptState(3,"game.exe","game.exe.local",4096,"changed-runtime-unverified",new());
     var state=new GameSetupState(true,true,true,true,receipt,null,true);

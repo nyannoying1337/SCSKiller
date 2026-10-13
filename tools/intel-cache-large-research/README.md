@@ -39,3 +39,17 @@ Each large-cap change stores the previous/next DLL, original ACL and previous re
 `build-large-tests.cmd [path-to-qualified-original-DLL]`: MASM wrapper tests, including real Windows exception unwinding. With the optional qualified original, also tests exact patch recognition, tamper rejection, byte-identical rollback, Windows PE mapping/function lookup and deterministic cap changes. Test images stay in ignored bin; they are not installed.
 
 See `LargerCapsResearch.md` for the original tracing evidence. Fixed instruction addresses and hashes apply only to this qualified image.
+
+## Driver updates and GPU families
+
+The app checks active, started display devices through SetupAPI/Configuration Manager, then reads their actual driver registry keys. It does not pick a stale DriverStore folder by filename or modification date. While open, a 30-second metadata timer and window activation compare the driver version, registered package path and DLL/dependency file metadata. No driver bytes are hashed on those idle checks; a measured metadata request took about 109 ms on the test PC. There is no service or hidden installer.
+
+When identity changes, the app retains the saved private setup but disables applying/launching it until review. Stock recovery remains enabled. Use Check new DLLs to perform a read-only current-package review: SHA-256, offline embedded-signature status, executable-section constructor candidates and exact dependency hashes. The last qualified review and explicit compatibility reports are stored under the app's LocalAppData directory. An installer changing the package during review causes rejection/retry. A matching signature on an unknown image never enables patching.
+
+Unknown versions still need a reviewed patch definition. This is not automatic reverse engineering or automatic download of new patch offsets. If an updated driver is unsupported, Use system driver again removes the recorded private set and preserves shader caches. Switching an older private copy between limits does not make it compatible with a newer kernel driver.
+
+The current package also contains igd12um64xe3.dll (SHA-256 029E091F5B67A7418B39900E2AC4EAC9EF64767595E0138FF6569CC42FEB4911). Its cache constructor is independently at raw 0x1900E0 / RVA 0x190CE0, not the Xe2 location. Isolated 2/4 GiB constructor tests pass and preserve the neighboring 4 GiB field and unrelated state; the external helper is stubbed exactly as in the earlier constructor probe. Xe3 game patching remains disabled because there is no matching Xe3 GPU on this machine and its complete private dependency set/runtime loading are not qualified. The B580 is Xe2. Dedicated vs integrated status alone does not choose a renderer: use the architecture and actually observed loaded driver. XeH is inspected and remains unqualified.
+
+Xe3 test artifacts are research-only and are not included as driver files in the distributed app. See Xe3ConstructorSamples.cs / Xe3ConstructorProbe.cpp and DriverCatalogTests.cs for reproduction. Do not replace B580's Xe2 DLL with Xe3.
+
+Run `build-driver-review-tests.cmd <qualified Xe2 original> <qualified Xe3 original>` after building the app to reproduce catalogue guards and the isolated Xe3 constructor tests. No driver or game installation is performed by that script.

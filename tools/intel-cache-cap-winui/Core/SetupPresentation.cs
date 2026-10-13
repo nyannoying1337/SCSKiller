@@ -3,13 +3,14 @@ namespace ArcCache.Core;
 // Disk installation and runtime observation are independent states.
 public sealed record SetupPresentation(string Installed, string Title, string Next, bool WaitingForControl) {
     public static string Limit(int mib) => mib >= 1024 ? $"{mib / 1024} GiB" : $"{mib} MiB";
-    public static SetupPresentation From(GameSetupState? state, bool detected,bool routingReady=true) {
+    public static SetupPresentation From(GameSetupState? state, bool detected,bool routingReady=true,bool driverCompatible=true) {
         if(state?.CompatibilityRepairRequired==true)
             return new($"{Limit(state.Receipt!.MiB)} installed · compatibility update required", "Update the existing private setup", "Close the game. Choose Use system driver again, then prepare a fresh original 512 MiB copy. Changing the limit alone does not install the compatibility fix.", false);
         if (state?.Error != null || state?.FolderExists == true && !state.Configured)
             return new("Setup needs recovery", "Recover existing setup", "Open recovery options below. Import the original receipt before changing this setup.", false);
         if (state?.Configured == true && state.Receipt is { } receipt) {
             string installed = $"{Limit(receipt.MiB)} installed · private driver files verified";
+            if(!driverCompatible)return new($"{Limit(receipt.MiB)} saved · driver review required","Review the updated driver","Check new DLLs above, or use the system driver again. Your saved limit is retained.",false);
             if(!routingReady)return new($"{Limit(receipt.MiB)} saved · routing inactive","Private routing is off or needs a restart","The saved private files are present. Check private routing in Settings and restart Windows when requested. Use the loaded-driver check to see what a running game actually loaded.",false);
             if (!detected) return new(installed, "Game update needs attention", "Return to the system driver before detecting this game's updated executable.", false);
             bool control = receipt.MiB == 512 && receipt.Status != "original-control-loading-verified";
