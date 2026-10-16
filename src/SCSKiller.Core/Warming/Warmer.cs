@@ -77,6 +77,15 @@ public sealed class Warmer(IGpuVendorBackend vendor, string? warmExe = null) : I
         if (agsWhy != null) Log?.Report($"{game.Name}: {agsWhy}");
         if (Layer?.Invoke(game, workDir) is { } layer) ags = [.. ags, "--layer", layer];
         if (AgilityDir(game.ExePath) is { } d3d12) ags = [.. ags, "--d3d12", d3d12];
+        // Arc Cache's private Intel driver copy (ArcCacheDriver): checked here, linked into the stage and verified by the
+        // child before it compiles anything. Never ignored: a stock-driver warm would evict the game's cache down to 512 MiB.
+        if (ArcCacheDriver.FromEnvironment() is { } arc)
+        {
+            if (vendor.Vendor != GpuVendor.Intel) throw new InvalidOperationException("Arc Cache's private driver handoff is for Intel GPUs only; nothing was compiled.");
+            arc.Check(game);
+            ags = [.. ags, .. arc.WarmArgs()];
+            Log?.Report($"{game.Name}: compiling with Arc Cache's private driver copy ({arc.CacheMiB} MiB cache limit)");
+        }
         return new WarmRun(vendor, gpu, exe, game, workDir, options, progress, StuckAfter, stagePath, MaxRecoveries, Environment, ags, Log);
     }
 

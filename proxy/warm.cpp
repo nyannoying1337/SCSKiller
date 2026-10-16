@@ -25,14 +25,26 @@
 // below), as the game does, so a recording made on it replays where the system's runtime is older (Windows 10's has no
 // SM 6.6 and none of the newer pipeline subobjects). The loader takes the system's when that one is as new. A failed
 // staging runs on the system's, and so does a child whose device the game's runtime didn't make (run again).
+// --driver-local <the game's <exe>.local folder> --driver-name <igd12um64xe*.dll> --driver-sha256 <hex> --driver-mib N
+// (Intel, Arc Cache's private driver copy; SCSKiller.Core's ArcCacheDriver): <stage>\<exe>.local becomes a junction to
+// that folder, so the child loads the same patched driver as the game (same per-game cache limit, same cache file). The
+// child refuses to compile unless that copy is what it loaded: the adapter's D3D12 driver, loaded by its full path before
+// the device exists, must come from the .local folder (the stock one could trim the game's cache to 512 MiB on its own),
+// and after device creation every igd12um* module must, with <driver-name> at the expected SHA-256. It then prints
+// ARC_CACHE_DRIVER_LOADED|<base64 UTF-8 path>|<driver-name>|<SHA-256>|<MiB> on stderr for Arc Cache. The junction is
+// removed with the stage (RemoveDirectoryW: the link only, never the game's files).
 #define NOMINMAX
 #include <windows.h>
+#include <winioctl.h>
+#include <bcrypt.h>
+#include <psapi.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <fcntl.h>
 #include <io.h>
 #include <cstdarg>
 #include <cstdio>
+#include <algorithm>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -41,6 +53,7 @@
 
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "bcrypt.lib")
 
 extern "C" __declspec(dllexport) const int SCSKiller_WarmHost = 1;  // the proxy warms only in a process exporting it
 // Read by the system d3d12.dll when the proxy loads it. 0 (no --d3d12) is older than any system runtime: the system's.
@@ -84,6 +97,10 @@ struct Opts {
     std::wstring d3d12;          // the game's Agility SDK folder (its D3D12Core.dll)
     UINT sdk = 0;                // set by the parent for its child: the staged D3D12Core.dll's SDK version
     int pass = -1;
+    std::wstring driver_local;   // Arc Cache: the game's <exe>.local folder with its private Intel driver copy
+    std::wstring driver_name;    // ...the cache-capable DLL in it (igd12um64xe2/xe3/xeh.dll)
+    std::wstring driver_sha256;  // ...its SHA-256, upper-case hex
+    uint32_t driver_mib = 0;     // ...the per-game cache limit it was patched to
 };
 
 static bool parse(int argc, wchar_t** argv, int i, Opts& o) {
@@ -106,6 +123,10 @@ static bool parse(int argc, wchar_t** argv, int i, Opts& o) {
         else if (k == L"--layer") o.layer = v;
         else if (k == L"--d3d12") o.d3d12 = v;
         else if (k == L"--sdk") o.sdk = wcstoul(v.c_str(), &end, 10);
+        else if (k == L"--driver-local") o.driver_local = v;
+        else if (k == L"--driver-name") o.driver_name = v;
+        else if (k == L"--driver-sha256") o.driver_sha256 = v;
+        else if (k == L"--driver-mib") o.driver_mib = wcstoul(v.c_str(), &end, 10);
         else if (k == L"--skip" || k == L"--isolate") {
             for (const wchar_t* c = v.c_str(); *c;) {
                 (k == L"--skip" ? o.skip : o.isolate).push_back(_wcstoui64(c, &end, 10));
@@ -162,6 +183,147 @@ static std::wstring quoted(const std::wstring& a) {
     }
 }
 
+// ---- Arc Cache's private driver copy (--driver-local) ----
+
+static bool driver_args_ok(const Opts& o) {
+    if (o.driver_local.empty() && o.driver_name.empty() && o.driver_sha256.empty() && !o.driver_mib) return true;
+    bool hex = o.driver_sha256.size() == 64;
+    for (wchar_t c : o.driver_sha256) hex = hex && iswxdigit(c);
+    bool name = !_wcsicmp(o.driver_name.c_str(), L"igd12um64xe2.dll") || !_wcsicmp(o.driver_name.c_str(), L"igd12um64xe3.dll") ||
+                !_wcsicmp(o.driver_name.c_str(), L"igd12um64xeh.dll");
+    bool mib = o.driver_mib == 1024 || o.driver_mib == 2048 || o.driver_mib == 4096 || o.driver_mib == 8192 || o.driver_mib == 16384;
+    return !o.driver_local.empty() && hex && name && mib;
+}
+
+// The proxy's staged file name. With an <exe>.local folder, DevOverrideEnable makes the loader match DLLs by base name, so a
+// proxy named d3d12.dll would get itself back for the system d3d12.dll it loads by full path (its DllMain then fails:
+// "proxy d3d12.dll missing or too old"). The child loads it by path, so with --driver-local it's staged under another name.
+static const wchar_t* proxy_file(const Opts& o) { return o.driver_local.empty() ? L"d3d12.dll" : L"scskiller_d3d12.dll"; }
+
+// <link> (a new, empty folder name) becomes a junction to the local folder <target>; false with GetLastError() otherwise
+static bool make_junction(const std::wstring& link, const std::wstring& target) {
+    if (target.size() < 3 || target[1] != L':' || target[2] != L'\\') return SetLastError(ERROR_BAD_PATHNAME), false;  // a drive path, not UNC
+    if (!CreateDirectoryW(link.c_str(), nullptr)) return false;
+    HANDLE h = CreateFileW(link.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD e = GetLastError();
+        RemoveDirectoryW(link.c_str());
+        return SetLastError(e), false;
+    }
+    std::wstring sub = L"\\??\\" + target, print = target;
+    // REPARSE_DATA_BUFFER's MountPointReparseBuffer (ntifs.h): tag, data length, reserved, then the four name offsets/lengths
+    std::vector<BYTE> buf(16 + (sub.size() + 1 + print.size() + 1) * sizeof(wchar_t));
+    auto w16 = [&](size_t at, size_t v) { *(WORD*)(buf.data() + at) = (WORD)v; };
+    *(DWORD*)buf.data() = IO_REPARSE_TAG_MOUNT_POINT;
+    w16(4, buf.size() - 8);
+    w16(8, 0), w16(10, sub.size() * sizeof(wchar_t));
+    w16(12, (sub.size() + 1) * sizeof(wchar_t)), w16(14, print.size() * sizeof(wchar_t));
+    memcpy(buf.data() + 16, sub.c_str(), (sub.size() + 1) * sizeof(wchar_t));
+    memcpy(buf.data() + 16 + (sub.size() + 1) * sizeof(wchar_t), print.c_str(), (print.size() + 1) * sizeof(wchar_t));
+    DWORD got = 0;
+    BOOL ok = DeviceIoControl(h, FSCTL_SET_REPARSE_POINT, buf.data(), (DWORD)buf.size(), nullptr, 0, &got, nullptr);
+    DWORD e = GetLastError();
+    CloseHandle(h);
+    if (!ok) RemoveDirectoryW(link.c_str());
+    return SetLastError(e), ok != FALSE;
+}
+
+static std::wstring sha256_file(const std::wstring& path) {  // upper-case hex; empty on failure
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return L"";
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    UCHAR digest[32];
+    std::vector<UCHAR> chunk(1 << 20);
+    bool ok = BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0 && BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0) >= 0;
+    for (DWORD n = 0; ok && (ok = ReadFile(f, chunk.data(), (DWORD)chunk.size(), &n, nullptr) != FALSE) && n;)
+        ok = BCryptHashData(hash, chunk.data(), n, 0) >= 0;
+    ok = ok && BCryptFinishHash(hash, digest, sizeof digest, 0) >= 0;
+    if (hash) BCryptDestroyHash(hash);
+    if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+    CloseHandle(f);
+    if (!ok) return L"";
+    std::wstring hex;
+    for (UCHAR b : digest) hex += L"0123456789ABCDEF"[b >> 4], hex += L"0123456789ABCDEF"[b & 15];
+    return hex;
+}
+
+static std::string base64_utf8(const std::wstring& w) {
+    std::string u(WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr), '\0'), out;
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), u.data(), (int)u.size(), nullptr, nullptr);
+    static const char* t = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (size_t i = 0; i < u.size(); i += 3) {
+        uint32_t v = (uint8_t)u[i] << 16 | (i + 1 < u.size() ? (uint8_t)u[i + 1] << 8 : 0) | (i + 2 < u.size() ? (uint8_t)u[i + 2] : 0);
+        out += t[v >> 18 & 63], out += t[v >> 12 & 63];
+        out += i + 1 < u.size() ? t[v >> 6 & 63] : '=';
+        out += i + 2 < u.size() ? t[v & 63] : '=';
+    }
+    return out;
+}
+
+static std::wstring module_path(HMODULE m) {
+    std::wstring p(32768, L'\0');
+    p.resize(GetModuleFileNameW(m, p.data(), (DWORD)p.size()));
+    if (!wcsncmp(p.c_str(), L"\\\\?\\", 4)) p.erase(0, 4);
+    return p;
+}
+
+// directly inside <dir> (which ends with a backslash)
+static bool directly_in(const std::wstring& path, const std::wstring& dir) {
+    return path.size() > dir.size() && !_wcsnicmp(path.c_str(), dir.c_str(), dir.size()) && path.find(L'\\', dir.size()) == std::wstring::npos;
+}
+
+// The private copy's two spellings: <stage>\<exe>.local\ (the junction, as the loader builds it) and the game's own folder
+// (--driver-local), should the loader report the path behind the junction
+struct PrivateDirs {
+    std::wstring link, target;
+    bool has(const std::wstring& path) const { return directly_in(path, link) || (!target.empty() && directly_in(path, target)); }
+};
+
+// Before the device exists: the adapter's D3D12 driver (as the D3D12 runtime loads it, by its full DriverStore path) must
+// come from <local>. "" when it does or can't be asked (the check after device creation still runs); the reason otherwise.
+static std::wstring driver_before_device(LUID luid, const PrivateDirs& local) {
+    struct OpenFromLuid { LUID luid; UINT adapter; };
+    struct Query { UINT adapter; UINT type; void* data; UINT size; };
+    struct UmdName { UINT version; WCHAR name[MAX_PATH]; };
+    HMODULE gdi = GetModuleHandleW(L"gdi32.dll");
+    if (!gdi) gdi = LoadLibraryExW(L"gdi32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    auto open = gdi ? (LONG(APIENTRY*)(OpenFromLuid*))GetProcAddress(gdi, "D3DKMTOpenAdapterFromLuid") : nullptr;
+    auto query = gdi ? (LONG(APIENTRY*)(Query*))GetProcAddress(gdi, "D3DKMTQueryAdapterInfo") : nullptr;
+    auto close = gdi ? (LONG(APIENTRY*)(UINT*))GetProcAddress(gdi, "D3DKMTCloseAdapter") : nullptr;
+    OpenFromLuid o = {luid, 0};
+    if (!open || !query || !close || open(&o) < 0) return fwprintf(stderr, L"private driver: can't open the adapter to check its driver first\n"), L"";
+    UmdName n = {3 /* KMTUMDVERSION_DX12 */, {}};
+    Query q = {o.adapter, 1 /* KMTQAITYPE_UMDRIVERNAME */, &n, sizeof n};
+    LONG st = query(&q);
+    close(&o.adapter);
+    if (st < 0 || !n.name[0]) return fwprintf(stderr, L"private driver: the adapter's D3D12 driver name isn't available (0x%08X)\n", (unsigned)st), L"";
+    HMODULE m = LoadLibraryExW(n.name, nullptr, 0);  // kept: the runtime gets this one
+    if (!m) return L"the D3D12 driver " + std::wstring(n.name) + L" didn't load (error " + std::to_wstring(GetLastError()) + L")";
+    std::wstring at = module_path(m);
+    if (local.has(at)) return L"";
+    FreeLibrary(m);
+    return L"Windows loaded the normal driver (" + at + L") instead of the private copy. Is the private-driver setting on and was the PC restarted?";
+}
+
+// After device creation: every igd12um* module from <local>, <name> at <sha256>; the loaded driver's path, or "" with *why
+static std::wstring driver_after_device(const Opts& o, const PrivateDirs& local, std::wstring* why) {
+    HMODULE mods[1024];
+    DWORD bytes = 0;
+    if (!EnumProcessModules(GetCurrentProcess(), mods, sizeof mods, &bytes)) return *why = L"the loaded modules can't be listed", L"";
+    std::wstring found;
+    for (DWORD i = 0; i < std::min<DWORD>(bytes / sizeof(HMODULE), 1024); ++i) {
+        std::wstring p = module_path(mods[i]), base = p.substr(p.find_last_of(L'\\') + 1);
+        if (_wcsnicmp(base.c_str(), L"igd12um", 7)) continue;
+        if (!local.has(p)) return *why = L"the normal driver " + p + L" is loaded next to the private copy", L"";
+        if (!_wcsicmp(base.c_str(), o.driver_name.c_str())) found = p;
+    }
+    if (found.empty()) return *why = o.driver_name + L" didn't load (the device runs on another driver)", L"";
+    std::wstring hash = sha256_file(found);
+    if (_wcsicmp(hash.c_str(), o.driver_sha256.c_str())) return *why = L"the loaded " + o.driver_name + L" isn't the copy Arc Cache checked (SHA-256 " + hash + L")", L"";
+    return found;
+}
+
 // AGS 6.x ABI (amd_ags.h, GPUOpen AGS SDK, MIT): only what device creation needs
 struct AgsDeviceParams { IDXGIAdapter* adapter; IID iid; D3D_FEATURE_LEVEL level; };
 struct AgsExtensionParams { const wchar_t *app, *engine; unsigned app_version, engine_version, uav_slot; };
@@ -206,7 +368,7 @@ static int child(DWORD parent_pid, const Opts& o) {
     dir.resize(dir.size() - exe.size());
     SetEnvironmentVariableW(L"SCSKILLER_MODE", L"warm");
     D3D12SDKVersion = o.sdk;  // before the proxy loads the system d3d12.dll
-    HMODULE m = LoadLibraryW((dir + L"d3d12.dll").c_str());
+    HMODULE m = LoadLibraryW((dir + proxy_file(o)).c_str());
     auto proc = [m](const char* n) { return m ? (void*)GetProcAddress(m, n) : nullptr; };
     auto create_device = (decltype(&D3D12CreateDevice))proc("D3D12CreateDevice");
     auto options = (void(WINAPI*)(int, BOOL, uint64_t))proc("SCSKiller_WarmOptions");
@@ -245,6 +407,17 @@ static int child(DWORD parent_pid, const Opts& o) {
     }
     ID3D12Device* dev = nullptr;
     if (!best) return fail(o.luid ? L"no adapter with that LUID" : L"no GPU adapter");
+    PrivateDirs local{dir + exe + L".local\\", L""};
+    if (!o.driver_local.empty()) {
+        std::wstring t(32768, L'\0');
+        t.resize(GetFullPathNameW(o.driver_local.c_str(), (DWORD)t.size(), t.data(), nullptr));
+        while (!t.empty() && (t.back() == L'\\' || t.back() == L'/')) t.pop_back();
+        if (!t.empty()) local.target = t + L"\\";
+    }
+    if (!o.driver_local.empty()) {
+        std::wstring why = driver_before_device(bd.AdapterLuid, local);
+        if (!why.empty()) return fail(L"Arc Cache private driver: " + why + L" Nothing was compiled.");
+    }
     options(o.threads, o.idle, o.start);
     warm_rt(o.rt_threads, o.skip.data(), (uint32_t)o.skip.size());
     memory(o.memory_mb);
@@ -262,6 +435,13 @@ static int child(DWORD parent_pid, const Opts& o) {
         wchar_t why[16];
         swprintf_s(why, L" (0x%08X)", (unsigned)hr);
         return fail(L"D3D12 device creation failed on " + std::wstring(bd.Description) + why);
+    }
+
+    if (!o.driver_local.empty()) {  // before the first pipeline: a stock driver would evict the game's cache down to 512 MiB
+        std::wstring why, loaded = driver_after_device(o, local, &why);
+        if (loaded.empty()) return fail(L"Arc Cache private driver: " + why + L". Nothing was compiled.");
+        fwprintf(stderr, L"ARC_CACHE_DRIVER_LOADED|%hs|%ls|%ls|%u\n", base64_utf8(loaded).c_str(), o.driver_name.c_str(), o.driver_sha256.c_str(), o.driver_mib);
+        fflush(stderr);
     }
 
     uint64_t p[4];  // done, total, failed, finished
@@ -321,9 +501,11 @@ int wmain(int argc, wchar_t** argv) {
               "                      [--package <app user model id>] [--stage-path <install folder>\\<dir>\\<exe>]\n"
               "                      [--skip-keys <sha1 hex>,...] [--isolate i,j,...]\n"
               "                      [--ags <amd_ags_x64.dll> --ags-app <name> --ags-engine <name>] [--pass K]\n"
-              "                      [--layer <folder>] [--d3d12 <folder>]\n", stderr);
+              "                      [--layer <folder>] [--d3d12 <folder>]\n"
+              "                      [--driver-local <exe>.local --driver-name <dll> --driver-sha256 <hex> --driver-mib N]\n", stderr);
         return fail(L"bad arguments");
     }
+    if (!driver_args_ok(o)) return fail(L"bad --driver-local / --driver-name / --driver-sha256 / --driver-mib arguments");
     std::wstring work = argv[1], exe = argv[2];
     if (work.back() != L'\\' && work.back() != L'/') work += L'\\';
     wchar_t self[MAX_PATH];
@@ -357,12 +539,15 @@ int wmain(int argc, wchar_t** argv) {
         }
         // the child's and the proxy's GetModuleFileNameW, and CreateProcessW, take at most MAX_PATH
         size_t longest = std::max(exe.size(), wcslen(L"scskiller_warm_times.csv")), full = GetFullPathNameW((flat + sub).c_str(), 0, nullptr, nullptr);
+        // --driver-local: the loader opens <exe>.local\<driver package file>; the package's longest names are ~27 characters
+        if (!o.driver_local.empty()) longest = std::max(longest, exe.size() + wcslen(L".local\\") + 40);
         if (!full || full - 1 + longest >= MAX_PATH)
             fwprintf(stderr, L"--stage-path too long (%zu characters with the longest file name): staging in %ls\n", full - 1 + longest, flat.c_str());
         else
             for (size_t e = 0; (e = sub.find(L'\\', e)) != std::wstring::npos; ++e)
                 dirs.push_back(flat + sub.substr(0, e)), CreateDirectoryW(dirs.back().c_str(), nullptr), stage = dirs.back() + L"\\";
     }
+    bool linked = false;  // <stage>\<exe>.local is our junction to --driver-local
     std::vector<std::wstring> layer;  // the --layer files staged (CopyFileW never overwrites a staged input)
     std::vector<std::wstring> agility;  // the --d3d12 files staged, as D3D12\<name>
     auto unput = [&](const std::wstring& name) {
@@ -375,7 +560,10 @@ int wmain(int argc, wchar_t** argv) {
         std::function<void()> f;
         ~Unstage() { f(); }
     } unstage{[&] {  // only inside this run's folder: the staged inputs go, the proxy's outputs stay in flat
-        for (auto n : {exe, std::wstring(L"d3d12.dll"), std::wstring(L"scskiller.db"), std::wstring(L"scskiller_gen.db"), std::wstring(L"scskiller_pass.bin")})
+        // the private driver junction first, and only the link: RemoveDirectoryW never follows it into the game's folder
+        if (linked && !RemoveDirectoryW((stage + exe + L".local").c_str()))
+            fwprintf(stderr, L"removing the staged %ls.local link failed (error %lu)\n", (stage + exe).c_str(), GetLastError());
+        for (auto n : {exe, std::wstring(proxy_file(o)), std::wstring(L"scskiller.db"), std::wstring(L"scskiller_gen.db"), std::wstring(L"scskiller_pass.bin")})
             unput(n);
         for (auto& n : layer) unput(n);
         for (auto& n : agility) unput(n);
@@ -394,9 +582,23 @@ int wmain(int argc, wchar_t** argv) {
     };
     std::wstring proxy = bin + L"d3d12.dll";
     if (GetFileAttributesW(proxy.c_str()) == INVALID_FILE_ATTRIBUTES) proxy = bin + L"..\\d3d12.dll";  // the segheap\ build uses its parent's
-    if (!put(self, exe, false) || !put(proxy, L"d3d12.dll", false) || !put(work + L"scskiller.db", L"scskiller.db", true) ||
+    if (!put(self, exe, false) || !put(proxy, proxy_file(o), false) || !put(work + L"scskiller.db", L"scskiller.db", true) ||
         !put(work + L"scskiller_gen.db", L"scskiller_gen.db", true) || !put(work + L"scskiller_pass.bin", L"scskiller_pass.bin", true))
         return fail(L"staging into " + stage + L" failed (error " + std::to_wstring(GetLastError()) + L")");
+    if (!o.driver_local.empty()) {
+        std::wstring target(32768, L'\0');
+        target.resize(GetFullPathNameW(o.driver_local.c_str(), (DWORD)target.size(), target.data(), nullptr));
+        while (target.size() > 3 && (target.back() == L'\\' || target.back() == L'/')) target.pop_back();
+        DWORD ta = target.empty() ? INVALID_FILE_ATTRIBUTES : GetFileAttributesW(target.c_str());
+        if (ta == INVALID_FILE_ATTRIBUTES || !(ta & FILE_ATTRIBUTE_DIRECTORY) || (ta & FILE_ATTRIBUTE_REPARSE_POINT))
+            return fail(L"--driver-local " + o.driver_local + L" is not a folder");
+        size_t slash = target.find_last_of(L'\\');
+        if (_wcsicmp(target.c_str() + slash + 1, (exe + L".local").c_str()))
+            return fail(L"--driver-local " + o.driver_local + L" is not a " + exe + L".local folder");
+        if (!make_junction(stage + exe + L".local", target))
+            return fail(L"linking the private driver folder into " + stage + L" failed (error " + std::to_wstring(GetLastError()) + L")");
+        linked = true;
+    }
     if (!o.layer.empty()) {
         // the layer's log stays in the stage, with the proxy's outputs
         std::error_code ec;

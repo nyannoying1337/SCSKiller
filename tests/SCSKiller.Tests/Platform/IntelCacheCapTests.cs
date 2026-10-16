@@ -23,6 +23,41 @@ public class IntelCacheCapTests
         Assert.Null(((IGpuVendorBackend)new UnsupportedVendor(IntelGpu)).PerGameCacheCap);
     }
 
+    [Theory]
+    [InlineData("1024", 1L << 30)]
+    [InlineData("2048", 2L << 30)]
+    [InlineData("4096", 4L << 30)]
+    [InlineData("8192", 8L << 30)]
+    [InlineData("16384", 16L << 30)]
+    public void ArcCache_private_handoff_sets_only_the_child_compile_cap(string mib,long expected)
+    {
+        string[] keys=[ArcCacheDriver.MiBVariable,"SCSKILLER_ARCCACHE_PRIVATE_DRIVER_DIR","SCSKILLER_ARCCACHE_GAME_EXE","SCSKILLER_ARCCACHE_DRIVER_NAME","SCSKILLER_ARCCACHE_DRIVER_SHA256"];
+        string?[] old=keys.Select(Environment.GetEnvironmentVariable).ToArray();
+        try {
+            Environment.SetEnvironmentVariable(ArcCacheDriver.MiBVariable,mib);
+            Environment.SetEnvironmentVariable("SCSKILLER_ARCCACHE_PRIVATE_DRIVER_DIR",@"C:\game\game.exe.local");
+            Environment.SetEnvironmentVariable("SCSKILLER_ARCCACHE_GAME_EXE",@"C:\game\game.exe");
+            Environment.SetEnvironmentVariable("SCSKILLER_ARCCACHE_DRIVER_NAME","igd12um64xe2.dll");
+            Environment.SetEnvironmentVariable("SCSKILLER_ARCCACHE_DRIVER_SHA256",new string('A',64));
+            Assert.Equal(expected,new IntelBackend(IntelGpu).PerGameCacheCap);
+        } finally { for(int i=0;i<keys.Length;i++)Environment.SetEnvironmentVariable(keys[i],old[i]); }
+    }
+
+    [Fact]
+    public void Without_complete_handoff_intel_keeps_the_measured_512_MiB_cap()
+    {
+        string[] keys=[ArcCacheDriver.MiBVariable,"SCSKILLER_ARCCACHE_PRIVATE_DRIVER_DIR","SCSKILLER_ARCCACHE_GAME_EXE","SCSKILLER_ARCCACHE_DRIVER_NAME","SCSKILLER_ARCCACHE_DRIVER_SHA256"];
+        string?[] old=keys.Select(Environment.GetEnvironmentVariable).ToArray();
+        try {
+            Environment.SetEnvironmentVariable(ArcCacheDriver.MiBVariable,"16384");
+            Environment.SetEnvironmentVariable("SCSKILLER_ARCCACHE_PRIVATE_DRIVER_DIR",@"C:\game\game.exe.local");
+            Environment.SetEnvironmentVariable("SCSKILLER_ARCCACHE_GAME_EXE",@"C:\game\game.exe");
+            Environment.SetEnvironmentVariable("SCSKILLER_ARCCACHE_DRIVER_NAME",null);
+            Environment.SetEnvironmentVariable("SCSKILLER_ARCCACHE_DRIVER_SHA256",new string('A',64));
+            Assert.Equal(Cap,new IntelBackend(IntelGpu).PerGameCacheCap);
+        } finally { for(int i=0;i<keys.Length;i++)Environment.SetEnvironmentVariable(keys[i],old[i]); }
+    }
+
     [Fact]
     public void A_game_over_the_cap_reports_the_share_that_fits()
     {

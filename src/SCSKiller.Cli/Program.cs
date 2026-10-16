@@ -39,6 +39,8 @@ const string Usage = """
                                                   the index's shaders and those this PC's recording saw (default <game id>.reference.json)
       task register|unregister                    the logon/idle "re-warm after a driver update" task
       fetch-codecs <dir>                          packaging: the pinned Oodle/zlib DLLs in <dir>, downloaded if missing
+      arc-cache-info                              one JSON line for Arc Cache: this build's version and whether it (and its
+                                                  native warm exe) can compile with a game's private Intel driver copy
     <game> is an id (steam:2909400) or a case-insensitive part of the name.
     """;
 
@@ -47,7 +49,7 @@ RouteFailover.Product = "SCSKiller-CLI";
 if (args.Length == 0 || args[0] is "-h" or "--help" or "help") { Console.WriteLine(Usage); return 0; }
 // The app is handing over to Update.exe, which replaces this folder: start nothing (the scheduled task runs again later).
 // Packaging never reads the app's data folder.
-if (args[0] != "fetch-codecs" && Busy.Applying(AppStore.DefaultDir, DateTimeOffset.UtcNow))
+if (args[0] is not ("fetch-codecs" or "arc-cache-info") && Busy.Applying(AppStore.DefaultDir, DateTimeOffset.UtcNow))
 {
     const string busy = "an update is being installed; try again in a minute";
     Console.Error.WriteLine(busy);
@@ -75,6 +77,7 @@ try
         "task" => TaskCommand(),
         "nvidia-snapshot" => NvidiaSnapshot(),
         "nvidia-auto-shader" => NvidiaAutoShader(),
+        "arc-cache-info" => ArcCacheInfo(),
         "fetch-codecs" => FetchCodecs(args.ElementAtOrDefault(1) ?? throw new ArgumentException("usage: scskiller fetch-codecs <dir>")),
         _ => Fail($"unknown command '{args[0]}'\n{Usage}"),
     };
@@ -89,6 +92,28 @@ try { resultFile = Opt(Elevated.ResultArg); }
 catch (ArgumentException e) { code = Fail(e.Message); }
 if (resultFile != null) Elevated.WriteResult(resultFile, code == 0, Outcome.Message ?? "");
 return code;
+
+// Arc Cache asks this before it hands over a private driver copy (ArcCacheDriver): an SCSKiller without the handoff would
+// compile with the stock driver and evict a larger game cache down to 512 MiB, so Arc Cache refuses such a build for it.
+// warmDriverLocal: the warm exe next to this CLI takes --driver-local (its usage text says so); read only, starts no compile.
+static int ArcCacheInfo()
+{
+    string? warm = SCSKiller.Core.Warming.NativeTools.Find(SCSKiller.Core.Warming.Warmer.ExeFor(GpuVendor.Intel));
+    bool driverLocal = false;
+    if (warm != null)
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo(warm) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })!;
+            var err = p.StandardError.ReadToEndAsync();
+            var outText = p.StandardOutput.ReadToEndAsync();
+            if (!p.WaitForExit(10000)) { try { p.Kill(); } catch (InvalidOperationException) { } }
+            else driverLocal = (err.Result + outText.Result).Contains("--driver-local", StringComparison.Ordinal);
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+    var version = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(ScsKiller).Assembly)?.InformationalVersion ?? "";
+    Console.WriteLine(JsonSerializer.Serialize(new { tool = "SCSKiller-Arc", version, arcCacheHandoff = 1, warm, warmDriverLocal = driverLocal }));
+    return 0;
+}
 
 static int Fail(string message)
 {

@@ -39,6 +39,7 @@ target_include_directories(scskiller PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 foreach(t scskiller_warm scskiller_warm_segheap)
   target_compile_definitions(${t} PRIVATE SCSK_RC_WARM)
   target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+  target_link_libraries(${t} PRIVATE bcrypt)
   add_dependencies(${t} scskiller)
 endforeach()
 

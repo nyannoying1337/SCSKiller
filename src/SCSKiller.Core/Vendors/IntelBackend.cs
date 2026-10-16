@@ -41,7 +41,8 @@ public sealed class IntelBackend(GpuInfo dxgi) : IGpuVendorBackend, IRefreshable
     /// tools/intel-arc/cache-limit.ps1; ARCHITECTURE.md): past it the driver evicts that game's own entries, so a larger
     /// game keeps only part of its compile. Not configurable (every workaround tested in ARCHITECTURE.md failed).</summary>
     public const long PerGameCap = 512L << 20;
-    public long? PerGameCacheCap => PerGameCap;
+    /// <summary>The stock cap, or the larger one of Arc Cache's private driver copy while it hands one over (ArcCacheDriver).</summary>
+    public long? PerGameCacheCap => ArcCacheDriver.RequestedCap() ?? PerGameCap;
 
     public CacheLimit? GetCacheLimit() => null;
 
