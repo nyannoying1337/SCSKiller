@@ -281,7 +281,8 @@ struct PrivateDirs {
 };
 
 // Before the device exists: the adapter's D3D12 driver (as the D3D12 runtime loads it, by its full DriverStore path) must
-// come from <local>. "" when it does or can't be asked (the check after device creation still runs); the reason otherwise.
+// come from <local>. "" when it does; the reason otherwise, also when Windows can't be asked: creating the device on the
+// stock driver could already trim the game's cache, so an unanswered question stops the compile too.
 static std::wstring driver_before_device(LUID luid, const PrivateDirs& local) {
     struct OpenFromLuid { LUID luid; UINT adapter; };
     struct Query { UINT adapter; UINT type; void* data; UINT size; };
@@ -292,14 +293,18 @@ static std::wstring driver_before_device(LUID luid, const PrivateDirs& local) {
     auto query = gdi ? (LONG(APIENTRY*)(Query*))GetProcAddress(gdi, "D3DKMTQueryAdapterInfo") : nullptr;
     auto close = gdi ? (LONG(APIENTRY*)(UINT*))GetProcAddress(gdi, "D3DKMTCloseAdapter") : nullptr;
     OpenFromLuid o = {luid, 0};
-    if (!open || !query || !close || open(&o) < 0) return fwprintf(stderr, L"private driver: can't open the adapter to check its driver first\n"), L"";
+    if (!open || !query || !close || open(&o) < 0) return L"Windows can't be asked which D3D12 driver this adapter loads.";
     UmdName n = {3 /* KMTUMDVERSION_DX12 */, {}};
     Query q = {o.adapter, 1 /* KMTQAITYPE_UMDRIVERNAME */, &n, sizeof n};
     LONG st = query(&q);
     close(&o.adapter);
-    if (st < 0 || !n.name[0]) return fwprintf(stderr, L"private driver: the adapter's D3D12 driver name isn't available (0x%08X)\n", (unsigned)st), L"";
+    if (st < 0 || !n.name[0]) {
+        wchar_t code[16];
+        swprintf(code, 16, L"0x%08X", (unsigned)st);
+        return L"Windows doesn't report this adapter's D3D12 driver (" + std::wstring(code) + L").";
+    }
     HMODULE m = LoadLibraryExW(n.name, nullptr, 0);  // kept: the runtime gets this one
-    if (!m) return L"the D3D12 driver " + std::wstring(n.name) + L" didn't load (error " + std::to_wstring(GetLastError()) + L")";
+    if (!m) return L"the D3D12 driver " + std::wstring(n.name) + L" didn't load (error " + std::to_wstring(GetLastError()) + L").";
     std::wstring at = module_path(m);
     if (local.has(at)) return L"";
     FreeLibrary(m);

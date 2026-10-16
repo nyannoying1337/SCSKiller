@@ -83,6 +83,9 @@ public sealed class Warmer(IGpuVendorBackend vendor, string? warmExe = null) : I
         {
             if (vendor.Vendor != GpuVendor.Intel) throw new InvalidOperationException("Arc Cache's private driver handoff is for Intel GPUs only; nothing was compiled.");
             arc.Check(game);
+            // A layer stages ReShade's dxgi.dll/d3d12.dll next to the staged exe; with the .local link the loader matches
+            // DLLs by base name, so it would collide like the proxy did (staged as scskiller_d3d12.dll for that reason).
+            if (ags.Contains("--layer")) throw new InvalidOperationException($"{game.Name} uses a ReShade layer, which can't be combined with Arc Cache's private driver copy yet; nothing was compiled.");
             ags = [.. ags, .. arc.WarmArgs()];
             Log?.Report($"{game.Name}: compiling with Arc Cache's private driver copy ({arc.CacheMiB} MiB cache limit)");
         }
